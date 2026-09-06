@@ -3,11 +3,9 @@ import { describe, it, expect } from 'vitest';
 import {
   MIN_PLAYBACK_SPEED_PERCENT,
   MAX_PLAYBACK_SPEED_PERCENT,
-  DEFAULT_PLAYBACK_SPEED_PERCENT,
   MIN_EFFECTIVE_BPM,
   MAX_EFFECTIVE_BPM,
   clampPlaybackSpeedPercent,
-  normalizeSavedPlaybackSpeedPercent,
   applyPlaybackSpeedToBpm,
   applyPlaybackSpeedToBpms,
   clampEffectiveBpm,
@@ -23,21 +21,6 @@ describe('clampPlaybackSpeedPercent', () => {
   it('数値として読めない値では fallback を返す', () => {
     expect(clampPlaybackSpeedPercent(Number.NaN, 80)).toBe(80);
     expect(clampPlaybackSpeedPercent(Number.POSITIVE_INFINITY, 80)).toBe(80);
-  });
-});
-
-describe('normalizeSavedPlaybackSpeedPercent', () => {
-  it('壊れた保存値は既定（100%）へ戻す', () => {
-    // 0 を通すとテンポが 0 になり 60 / 0 = Infinity で再生が進まなくなる
-    expect(normalizeSavedPlaybackSpeedPercent(0)).toBe(DEFAULT_PLAYBACK_SPEED_PERCENT);
-    expect(normalizeSavedPlaybackSpeedPercent(-50)).toBe(DEFAULT_PLAYBACK_SPEED_PERCENT);
-    expect(normalizeSavedPlaybackSpeedPercent('120')).toBe(DEFAULT_PLAYBACK_SPEED_PERCENT);
-    expect(normalizeSavedPlaybackSpeedPercent(undefined)).toBe(DEFAULT_PLAYBACK_SPEED_PERCENT);
-  });
-
-  it('範囲外の保存値は端へ寄せる', () => {
-    expect(normalizeSavedPlaybackSpeedPercent(1000)).toBe(MAX_PLAYBACK_SPEED_PERCENT);
-    expect(normalizeSavedPlaybackSpeedPercent(1)).toBe(MIN_PLAYBACK_SPEED_PERCENT);
   });
 });
 

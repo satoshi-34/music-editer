@@ -1,4 +1,5 @@
 import type { MeasureData, NoteEvent, ScoreType } from '../types/storage';
+import { devTuned } from './devTuning';
 import { getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { Accidental, Dot, Formatter, GraceNote, GraceNoteGroup, StaveNote, Voice } from 'vexflow';
 import { createVexFlowTuplets, vexFlowDotCount } from './vexFlowTimingUtils';
@@ -30,7 +31,15 @@ const FLAG_EXTRA_WIDTH: Record<NoteEvent['dur'], number> = {
   '32': 6,
   '64': 8,
 };
-const MEASURE_SIDE_PADDING = 18;
+// 小節の左右に確保する余白（VexFlow の音符列の外側）。Issue #559 の圧縮率は
+// 「音符の並びの理想間隔」だけに掛けるため、この余白と分けて足せるよう定数を公開する。
+export const MEASURE_SIDE_PADDING = 18;
+/** dev チューニング（#596）を通した実効値。本番は定数そのもの（devTuned 呼び出しごと消える） */
+function measureSidePadding(): number {
+  return import.meta.env.DEV
+    ? devTuned('layout.measureSidePadding', MEASURE_SIDE_PADDING)
+    : MEASURE_SIDE_PADDING;
+}
 const ACCIDENTAL_WIDTH = 6;
 const GRACE_NOTE_WIDTH = 8;
 
@@ -134,17 +143,16 @@ export const PART_SPACING_OFFSET_DEFAULT_PX = 0;
 // （大編成は ensembleAutoFitMultiplier による自動縮小フォールバックと合成されるため、
 // 既定を上げると縮小との相互作用が読みにくくなる）。
 //
-// ピアノ大譜表の2値は、運用者が素の既定値の画面を見ながらスライダーで詰めて選定した
-// 実測値（Issue #199、2026-08-09）。当初（Issue #49）は「右手/左手の対と次の段の対を
-// 見分けやすくする」ため段の間隔を +30px にしていたが、同じ見分けやすさを
-// 「大譜表の内側（右手と左手の間＝パート間隔）を広げ、段どうしはむしろ詰める」形で
-// 出したほうが自然に見える、という判断で −30px / +38px へ置き換えた
-// （浄書慣行でも「1つの大譜表の中は広く、段の間は詰める」が普通）。
+// ピアノ大譜表の2値は運用者の実測選定値。変遷:
+//   #49: 段の間隔 +30px（右手/左手の対と次の段の対を見分けやすくする）
+//   #199（2026-08-09）: −30px / +38px（「大譜表の内側を広げ、段どうしは詰める」浄書慣行寄り）
+//   #596/#599（2026-09-03）: −3px / +20px ← 現行。市販譜（月光ほか）との見比べで、
+//     −30 は詰まりすぎ・+38 は内側が広すぎた（#586「パート間隔狭くて段間隔広く見える」）
 export const NOTATION_SIZE_MULTIPLIER_DEFAULT = 1;
 export const NOTATION_SIZE_MULTIPLIER_LARGE_DEFAULT = 1.5;
 export const SYSTEM_ROW_GAP_DEFAULT_PX = 0;
-export const SYSTEM_ROW_GAP_PIANO_DEFAULT_PX = -30;
-export const PART_SPACING_OFFSET_PIANO_DEFAULT_PX = 38;
+export const SYSTEM_ROW_GAP_PIANO_DEFAULT_PX = -3;
+export const PART_SPACING_OFFSET_PIANO_DEFAULT_PX = 20;
 
 /**
  * 楽譜種別ごとの「音符の大きさ」「段の間隔」「パート間隔」の工場出荷既定値を返す純関数。
@@ -285,6 +293,16 @@ const FIRST_STAVE_Y = 20;
 const STAVE_SPACING = 80; // 段と段の間隔（Y方向）。単旋律・ピアノ・弦楽四重奏用
 const STAVE_SPACING_ENSEMBLE = 60; // 5パート以上の編成譜用（密な既定値）
 const ENSEMBLE_DENSE_SPACING_MIN_PARTS = 5;
+/**
+ * VexFlow の `new Stave(x, y, w)` に渡す y と、実際に描かれる五線の第1線（上端）との差
+ * （ネイティブ単位）。VexFlow は既定オプション（space_above_staff_ln = 4行 × 行間10単位）の
+ * ぶんだけ余白を上に取ってから五線を描くため、`staveYs[i]` そのものは「五線の上端」ではない。
+ * 五線の上端の座標が要る側（段内のパート境界に掴みしろを重ねる Issue #572 など）は、
+ * `staveYs[i] + STAVE_TOP_LINE_OFFSET` を使う（＝描画時の `stave.getYForLine(0)` と一致する）。
+ * 実際の描画と一致していることは ScorePagePartGapDrag.test.tsx が
+ * 描画された五線（`.vf-stave` の path）の座標と突き合わせて固定している。
+ */
+export const STAVE_TOP_LINE_OFFSET = 40;
 // パート間隔スライダー（Issue #90）で自動値をどこまで詰めても、ピアノ大譜表の
 // 右手/左手のような隣接パートが窮屈にならないための下限（ネイティブ単位）。
 export const MIN_STAVE_SPACING_PX = 30;
@@ -301,11 +319,15 @@ export function staveSpacingForPartCount(n: number): number {
  */
 export function computeLayout(
   n: number,
-  partSpacingOffsetPx: number = 0
+  partSpacingOffsetPx: number = 0,
+  // 段の下余白の追加分（px・論理座標）。ペダル記号が最下音を避けて下がるぶん
+  // （estimatePedalBottomExtensionPx・Issue #604）。0 なら従来と同じ高さ
+  bottomExtensionPx: number = 0
 ): { staveYs: number[]; sysH: number; staveSpacing: number } {
   const staveSpacing = Math.max(MIN_STAVE_SPACING_PX, staveSpacingForPartCount(n) + partSpacingOffsetPx);
   const staveYs = Array.from({ length: n }, (_, i) => FIRST_STAVE_Y + i * staveSpacing);
-  const sysH = FIRST_STAVE_Y + (n - 1) * staveSpacing + 60 + 20;
+  const safeExtension = Number.isFinite(bottomExtensionPx) ? Math.max(0, bottomExtensionPx) : 0;
+  const sysH = FIRST_STAVE_Y + (n - 1) * staveSpacing + 60 + 20 + safeExtension;
   return { staveYs, sysH, staveSpacing };
 }
 
@@ -321,9 +343,9 @@ export function computeLayout(
  * （旧 estimateEnsembleSystemHeightPx はパート間隔の変更に追従しない固定係数だったため、
  * 段数/ページの上限が実際より厳しく頭打ちされる不具合の原因になっていた。Issue #38）。
  */
-export function measuredSystemHeightPx(partCount: number, partSpacingOffsetPx: number = 0): number {
+export function measuredSystemHeightPx(partCount: number, partSpacingOffsetPx: number = 0, bottomExtensionPx: number = 0): number {
   const safeCount = Math.max(1, Math.floor(partCount));
-  return computeLayout(safeCount, partSpacingOffsetPx).sysH * SCORE_LAYOUT_RENDER_SCALE;
+  return computeLayout(safeCount, partSpacingOffsetPx, bottomExtensionPx).sysH * SCORE_LAYOUT_RENDER_SCALE;
 }
 
 /**
@@ -348,8 +370,8 @@ export const SYSTEM_BREATHING_ROOM_PX = 70;
  * 初期表示の推奨段数を求めるときに使う「1段ぶんが占める高さ」（px、音符の大きさ100%時）。
  * 実際に描かれる高さ（measuredSystemHeightPx）＋段間の余白（SYSTEM_BREATHING_ROOM_PX）。
  */
-export function recommendedSystemHeightPx(partCount: number, partSpacingOffsetPx: number = 0): number {
-  return measuredSystemHeightPx(partCount, partSpacingOffsetPx) + SYSTEM_BREATHING_ROOM_PX;
+export function recommendedSystemHeightPx(partCount: number, partSpacingOffsetPx: number = 0, bottomExtensionPx: number = 0): number {
+  return measuredSystemHeightPx(partCount, partSpacingOffsetPx, bottomExtensionPx) + SYSTEM_BREATHING_ROOM_PX;
 }
 // ===== ここまで段のレイアウト計算 =====
 
@@ -515,7 +537,7 @@ export function measureMinimumContentWidth(measure?: MeasureData): number {
 
   const contentWidth = primaryEvents.reduce(
     (width, event) => width + eventMinimumWidth(event),
-    MEASURE_SIDE_PADDING,
+    measureSidePadding(),
   );
   const hasWhole = primaryEvents.some((event) => event.dur === '1');
   const hasHalf = primaryEvents.some((event) => event.dur === '2');
@@ -588,7 +610,7 @@ export function combinedMeasureMinimumContentWidth(measures: (MeasureData | unde
   if (!hasAnyEvent) {
     return MIN_MEASURE_CONTENT_WIDTH;
   }
-  let contentWidth = MEASURE_SIDE_PADDING;
+  let contentWidth = measureSidePadding();
   for (const width of columnWidths.values()) contentWidth += width;
 
   if (hasWhole) {
@@ -725,12 +747,66 @@ function measurementPartState(
   return { clef: part?.clef ?? 'treble', accidentalState: createMeasureAccidentalState(fallbackKeySignature) };
 }
 
+// VexFlow の「理想的な音符間隔」を、浄書実務の最低幅へ換算する圧縮率（Issue #559）。
+//
+// preCalculateMinTotalWidth が返すのは Formatter が「ゆったり組むならこれくらい欲しい」と
+// する理想幅であって、「これ以上詰めると読めなくなる」下限ではない。これをそのまま
+// 「最低幅」として段割りの判定に使っていたため、月光（8分3連×4組・大譜表）のような密な
+// 譜面が実ブラウザで1小節/段まで膨張していた。
+//
+// 値の決め方（Issue の仕様どおり「月光基準＝2小節/段が成立する値」を実ブラウザで測って選んだ）:
+//   段の本文予算 833（論理単位・A4／余白14mm／音符の大きさ150%）に対し、月光1〜9小節の
+//   最低幅は圧縮率ごとに次のようになった（実測は docs/qa/system-break-min-width/README.md）。
+//     0.75 → 1,1,1,1,1,1,2,1 小節/段（ほぼ改善しない）
+//     0.72 → 2,1,1,1,1,2,1
+//     0.70 → 2,1,1,1,2,2
+//     0.64 → 2,2,2,2,1 ← 全段が2小節（末尾の1は9小節の余り）。受入条件1を満たす最大の値
+//   Issue 本文の「例: 0.7〜0.75」より強い圧縮になったのは、実際の段の予算が例の想定より
+//   狭いため（パート名を描かないピアノ譜でも、段割りの計画は既定の楽器名の余白 74 を
+//   見込んだままにしてある。ScorePage の instrumentLabelAreaWidth 参照。ここを 0 にすると
+//   既存譜面の段割りが全部変わるので #559 では触っていない）。
+//   なお 1音あたりの幅は 45 → 28.8 論理単位（150%表示で約19px）になる。浄書の実物
+//   （月光: 145mm の段に2小節＝1音あたり約22px）よりやや詰まるが、これは月光の5〜6小節目の
+//   ように「旋律と3連符の開始拍がずれて列が増える」小節まで2小節/段に収めるための値である。
+//   最終値は運用者の目視で確定する前提なので、緩めたいときはこの1か所だけを上げればよい。
+//
+// 変遷: 0.64（#589・2026-09-03）→ **0.3**（運用者指示・2026-09-04）。運用者が dev の調整パネル
+//   （#596）で月光検聴版（音符 150%・段の間隔 -60px・パート間隔 19px）を見ながら 0.4 → 0.3 と
+//   詰めて「これでいい」と判断した値。段割りの計画では下の実寸見積もり
+//   （combinedMeasureMinimumContentWidth）との Math.max が過密の下限を張るが、最終の小節幅は
+//   allocateCombinedMeasureWidths で均等幅とブレンドされるため、密疎が混在する段では密な小節が
+//   計画上の下限より縮み得る（#602/#603 と同じ、見積もりと実描画の乖離。0.64 のときから同じ構造）。
+//   この値を下げるほどその余地は広がるので、四重奏・編成譜で詰まりすぎと感じたらここを上げる。
+//   0.3 での実測（月光以外の譜種・重なりの計測）は未記録。docs/qa/system-break-min-width の
+//   画像・数値は 0.64 時点のもの。
+//
+// 段割りの計画（planEffectiveMeasuresPerSystem）は「開始拍ごとの符頭・臨時記号の実寸を積んだ
+// 見積もり」（combinedMeasureMinimumContentWidth）との Math.max を取り、そちらを過密の下限ガードとして
+// 残している。**0.64 時点の月光だけ**は、実ブラウザで修正前後の符頭の重なりが増えていないことを確認した
+// 過去記録がある（docs/qa/system-break-min-width/README.md の「重なりの実測」）。0.3 での確認は未記録。
+export const VEXFLOW_IDEAL_WIDTH_COMPRESSION = 0.3;
+
 /**
- * 合同 Formatter が実際に必要とする最小幅を VexFlow へ問い合わせる。
+ * VexFlow の理想幅（音符の並びのぶん）を、段割り判定に使う最低幅へ換算する。
+ * 圧縮率を1か所に閉じ込めるための小さな関数で、テストからも同じ換算を参照する。
+ */
+export function engravingMinimumWidthFromIdeal(idealWidth: number): number {
+  // dev 環境のみ #596 のチューニングページで上書きできる（本番は定数そのまま。
+  // import.meta.env.DEV を呼び出し位置に置き、本番バンドルから devTuning ごと消す）
+  return idealWidth * (import.meta.env.DEV
+    ? devTuned('layout.compression', VEXFLOW_IDEAL_WIDTH_COMPRESSION)
+    : VEXFLOW_IDEAL_WIDTH_COMPRESSION);
+}
+
+/**
+ * 合同 Formatter が必要とする幅を VexFlow へ問い合わせ、段割り判定用の最低幅を返す。
  *
  * 既存の開始拍ベース推定は、編集中の不完全データでも安全に動くため残す。一方で、
  * ここで得られる値は付点、連符、和音、臨時記号の ModifierContext を含む実測値なので、
  * 取得できる場合は必ずこちらを優先して小節幅を決める。
+ *
+ * ただし VexFlow が返すのは「理想的な間隔」なので、そのままでは最低幅として広すぎる。
+ * VEXFLOW_IDEAL_WIDTH_COMPRESSION で浄書実務の密度へ圧縮した値を返す（Issue #559）。
  */
 export function vexFlowCombinedMeasureMinimumContentWidth(
   measures: (MeasureData | undefined)[],
@@ -772,9 +848,13 @@ export function vexFlowCombinedMeasureMinimumContentWidth(
     // これを省くと、各 Voice が単独の列として計測され、右手・左手の拍が揃う実際の
     // Formatter より必要幅を小さく出すケースがある。
     const formatter = new Formatter().joinVoices(voices);
-    const width = formatter.preCalculateMinTotalWidth(voices);
-    return Number.isFinite(width)
-      ? Math.ceil(width + MEASURE_SIDE_PADDING + modifierSafetyWidth)
+    const idealWidth = formatter.preCalculateMinTotalWidth(voices);
+    return Number.isFinite(idealWidth)
+      // preCalculateMinTotalWidth が返すのは「理想的な間隔」であって「これ以上詰めたら
+      // 読めなくなる最低幅」ではない。そのまま最低幅として使うと段割りが広がりすぎるため、
+      // 浄書実務の密度へ圧縮してから最低幅にする（Issue #559。下の定数のコメント参照）。
+      // 圧縮するのは音符の並びのぶんだけで、小節の左右余白と記号の安全幅はそのまま足す。
+      ? Math.ceil(engravingMinimumWidthFromIdeal(idealWidth) + measureSidePadding() + modifierSafetyWidth)
       : undefined;
   } catch {
     // 壊れた旧データや、声部間で合計拍数が一致しない編集中の状態では Formatter が例外を出す。

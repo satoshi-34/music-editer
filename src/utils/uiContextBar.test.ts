@@ -88,8 +88,10 @@ describe('describeTool', () => {
     [{ duration: '2', dots: 1 }, '付点2分音符'],
     [{ duration: '16', isRest: true, dots: 1 }, '付点16分休符'],
     [{ duration: '8', tuplet: { numNotes: 3, notesOccupied: 2 } }, '3連符（8分音符）'],
-    // 入力時に付ける臨時記号（Issue #470）。ONになっていることが一番気づきにくいので文脈バーにも出す
+    // 臨時記号（Issue #470 → #548 で統合）。ONになっていることが一番気づきにくいので文脈バーにも出す
     [{ duration: '4', accidental: 'sharp' }, '♯付き4分音符'],
+    // 微分音も同じ属性になったので同じ形で出る（#548）
+    [{ duration: '4', microtone: 'quarterSharp' }, '¼♯付き4分音符'],
     [{ duration: '8', dots: 1, accidental: 'flat' }, '♭付き付点8分音符'],
     [{ duration: '8', tuplet: { numNotes: 3, notesOccupied: 2 }, accidental: 'natural' }, '♮付き3連符（8分音符）'],
   ] as Array<[Tool, string]>)('音符ツール %o は「%s」', (tool, expected) => {
@@ -99,7 +101,6 @@ describe('describeTool', () => {
   it.each([
     [{ mode: 'select' }, '小節選択'],
     [{ mode: 'tie' }, 'タイ'],
-    [{ mode: 'accidental', accidental: 'sharp' }, 'シャープ'],
     [{ mode: 'repeat', repeat: 'end' }, '終了リピート'],
     [{ mode: 'ending', ending: 2 }, '2番括弧'],
     [{ mode: 'dynamic', dynamic: 'mf' }, 'mf'],

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, resolvePlaybackStartMeasureNumber } from './playbackPositionUtils';
+import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findFirstSoundingOnsetMs, findPlaybackStartExpandedIndex, playbackStartMeasureNumberRange, resolvePlaybackStartMeasureNumber } from './playbackPositionUtils';
 import type { MeasureData } from '../types/storage';
 import { expandMeasuresForPlayback } from '../audio/repeatPlaybackUtils';
 
@@ -302,6 +302,67 @@ describe('calculateExpandedPlaybackDurationMs（展開済み列の残り時間�
   });
 });
 
+describe('findFirstSoundingOnsetMs（最初に音が鳴る時刻・#618 round1 P1-1）', () => {
+  it('先頭の小節に音符があれば 0（拍の頭から鳴る）', () => {
+    const expanded: MeasureData[] = [
+      { events: [{ dur: '1', isRest: false, keys: ['c/4'] }] },
+    ];
+    expect(findFirstSoundingOnsetMs(expanded, 120, [4, 4])).toBe(0);
+  });
+
+  it('先頭が全休符なら、次に音符が来る小節の時刻を返す（自己診断の窓の外だと分かる）', () => {
+    const expanded: MeasureData[] = [
+      { events: [{ dur: '1', isRest: true, keys: ['b/4'] }] },
+      { events: [{ dur: '1', isRest: false, keys: ['c/4'] }] },
+    ];
+    // 4/4 @120BPM: 1小節 = 2000ms
+    expect(findFirstSoundingOnsetMs(expanded, 120, [4, 4])).toBe(2000);
+  });
+
+  it('小節の途中から鳴り始める（弱起・休符始まり）ときはその拍の時刻', () => {
+    const expanded: MeasureData[] = [
+      {
+        events: [
+          { dur: '4', isRest: true, keys: ['b/4'] },
+          { dur: '4', isRest: false, keys: ['c/4'] },
+        ],
+      },
+    ];
+    // 120BPM の4分音符 = 500ms
+    expect(findFirstSoundingOnsetMs(expanded, 120, [4, 4])).toBe(500);
+  });
+
+  it('声部2だけに音がある小節も見る（主声部が休符でも鳴っている）', () => {
+    const expanded: MeasureData[] = [
+      {
+        events: [{ dur: '1', isRest: true, keys: ['b/4'] }],
+        voices: [
+          { id: 'v1', events: [{ dur: '1', isRest: true, keys: ['b/4'] }] },
+          { id: 'v2', events: [{ dur: '1', isRest: false, keys: ['c/3'] }], stemDirection: 'down' },
+        ],
+      },
+    ];
+    expect(findFirstSoundingOnsetMs(expanded, 120, [4, 4])).toBe(0);
+  });
+
+  it('音符が1つも無ければ null（鳴らないのが正しい譜面）', () => {
+    const expanded: MeasureData[] = [
+      { events: [{ dur: '1', isRest: true, keys: ['b/4'] }] },
+      { events: [] },
+    ];
+    expect(findFirstSoundingOnsetMs(expanded, 120, [4, 4])).toBeNull();
+  });
+
+  it('小節ごとのテンポ変更を反映する（遅い小節ぶんだけ後ろへずれる）', () => {
+    const expanded: MeasureData[] = [
+      { events: [{ dur: '1', isRest: true, keys: ['b/4'] }], bpm: 60 },
+      { events: [{ dur: '1', isRest: false, keys: ['c/4'] }], bpm: 60 },
+    ];
+    // 60BPM の 4/4 は1小節 4000ms
+    expect(findFirstSoundingOnsetMs(expanded, 60, [4, 4])).toBe(4000);
+  });
+});
+
 describe('resolvePlaybackStartMeasureNumber（小節番号の指定・#545）', () => {
   it('画面の小節番号（1始まり）を配列のインデックス（0始まり）へ直す', () => {
     expect(resolvePlaybackStartMeasureNumber('1', 8)).toEqual({ ok: true, measureIndex: 0 });
@@ -325,6 +386,26 @@ describe('resolvePlaybackStartMeasureNumber（小節番号の指定・#545）', 
     expect(resolvePlaybackStartMeasureNumber('３', 8)).toEqual({ ok: false, reason: 'notANumber' });
     expect(resolvePlaybackStartMeasureNumber('3abc', 8)).toEqual({ ok: false, reason: 'notANumber' });
     expect(resolvePlaybackStartMeasureNumber('2.5', 8)).toEqual({ ok: false, reason: 'notANumber' });
+  });
+
+  it('弱起（#473）があれば画面の番号は 0 始まり: 0 = 先頭の弱起、1 = その次の小節', () => {
+    const measures = [
+      { events: [], pickupBeats: 1 },
+      { events: [] },
+      { events: [] },
+    ];
+    const numbering = { measures, timeSignature: [4, 4] as [number, number] };
+    expect(resolvePlaybackStartMeasureNumber('0', 3, numbering)).toEqual({ ok: true, measureIndex: 0 });
+    expect(resolvePlaybackStartMeasureNumber('1', 3, numbering)).toEqual({ ok: true, measureIndex: 1 });
+    expect(resolvePlaybackStartMeasureNumber('2', 3, numbering)).toEqual({ ok: true, measureIndex: 2 });
+    // 表示上の最終番号は 2 なので 3 は範囲外
+    expect(resolvePlaybackStartMeasureNumber('3', 3, numbering)).toEqual({ ok: false, reason: 'outOfRange' });
+    expect(playbackStartMeasureNumberRange(3, numbering)).toEqual({ min: 0, max: 2 });
+    // 弱起が無ければ従来どおり（0 は範囲外・1 が先頭）
+    const plain = { measures: [{ events: [] }, { events: [] }], timeSignature: [4, 4] as [number, number] };
+    expect(resolvePlaybackStartMeasureNumber('0', 2, plain)).toEqual({ ok: false, reason: 'outOfRange' });
+    expect(resolvePlaybackStartMeasureNumber('1', 2, plain)).toEqual({ ok: true, measureIndex: 0 });
+    expect(playbackStartMeasureNumberRange(2, plain)).toEqual({ min: 1, max: 2 });
   });
 
   it('再生できる小節がまだ無い譜面は、番号の前に「小節が無い」を理由にする', () => {

@@ -42,10 +42,12 @@ import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
 import { collectTupletContinuityIssues, normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
 import {
   DEFAULT_TIME_SIGNATURE,
+  getMeasureBeats,
   isValidTimeSignature,
   normalizeTimeSignature,
   normalizeTimeSignatureStyle,
 } from './timeSignatureUtils';
+import { resolveTimeSignatureAtMeasure, sanitizePickupBeatsInParts } from './measureCapacityUtils';
 import type { InstrumentType } from '../audio/SoundSource';
 import { normalizeSavedGlobalBpm } from '../audio/tempoRange';
 import type { ClefType } from '../components/clefUtils';
@@ -431,6 +433,14 @@ function validateMeasureData(measure: any): measure is MeasureData {
       (typeof measure.rehearsalMark === 'string' &&
         measure.rehearsalMark.trim().length > 0 &&
         measure.rehearsalMark.trim().length <= 4)) &&
+    // 弱起（不完全小節）の実拍数（Issue #473）。0・負数・非数は「不完全小節」として
+    // 意味を成さず、そのまま使うと容量が NaN になって休符補完・拍スライスが黙って壊れる。
+    // 「拍子未満」であることは拍子が分からないとここでは判定できないので、
+    // 楽譜全体を見る validateSavedScoreData（hasValidPickupBeats）で確かめる。
+    (measure.pickupBeats === undefined ||
+      (typeof measure.pickupBeats === 'number' &&
+        Number.isFinite(measure.pickupBeats) &&
+        measure.pickupBeats > 0)) &&
     // 自由注釈テキスト（Issue #421）。壊れた値をそのまま描くと NaN 座標になるので、
     // 型・範囲の検証を通ったものだけ受け入れる。
     (measure.freeText === undefined || isValidFreeTextAnnotation(measure.freeText))
@@ -632,6 +642,26 @@ function validateSavedPartIds(data: SavedScoreData): boolean {
 }
 
 /**
+ * 弱起（不完全小節）の拍数が、その小節で有効な拍子より短いかを全パートについて確かめる
+ * （Issue #473 の不変条件1「正の有限・拍子未満」）。
+ * 拍子ぶん以上の値は「不完全小節」ではないので、正規化で黙って落とさず読み込みの時点で弾く。
+ */
+function hasValidPickupBeats(parts: PartData[], timeSignature: unknown): boolean {
+  const globalTimeSignature = normalizeTimeSignature(timeSignature);
+  // 拍子の解決元は正本のパート0（sanitizePickupBeatsInParts と同じ物差し・#473 round4 P2-1）。
+  // 各パート自身の小節列で解くと、途中拍子変更がパート0にしか書かれていない場合に
+  // 正規化後のデータを検証が弾き、保存が止まる
+  const primary = parts[0]?.measures ?? [];
+  return parts.every((part) =>
+    part.measures.every((measure, measureIndex) => {
+      if (measure.pickupBeats === undefined) return true;
+      const effective = resolveTimeSignatureAtMeasure(primary, measureIndex, globalTimeSignature);
+      return measure.pickupBeats < getMeasureBeats(effective);
+    })
+  );
+}
+
+/**
  * Validates a complete SavedScoreData object (v2 format)
  */
 // ファイルインポートなど localStorage 以外の経路でも深い検証を再利用できるよう export する。
@@ -672,6 +702,9 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
+    // 弱起の拍数が「その小節で有効な拍子未満」であること（Issue #473 の不変条件1）。
+    // 拍子ぶん以上の値は不完全小節ではないため、検証の境界で弾く。
+    hasValidPickupBeats(data.parts as PartData[], data.timeSignature) &&
     validateSavedPartIds(data) &&
     typeof data.systems === 'number' &&
     data.systems > 0 &&
@@ -769,6 +802,10 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
 
   // 保存済みデータはユーザーが手編集した JSON や古いバックアップから来ることがある。
   // ここで必ず検証してから返すことで、画面側は「読み込めたデータは安全」と考えられる。
+  // 弱起の不変条件は検証の前に正す（旧ビルドが残した不正値で開けなくならないように・#473）
+  if (parsedData && Array.isArray(parsedData.parts) && Array.isArray(parsedData.timeSignature)) {
+    parsedData.parts = sanitizePickupBeatsInParts(parsedData.parts, normalizeTimeSignature(parsedData.timeSignature));
+  }
   if (!validateSavedScoreData(parsedData)) {
     return {
       success: false,
@@ -835,14 +872,14 @@ function createStorageError(error: unknown): StorageError {
     if (error.name === 'QuotaExceededError') {
       return {
         type: StorageErrorType.QUOTA_EXCEEDED,
-        message: 'Storage quota exceeded. Please clear some data or use export functionality.',
+        message: STORAGE_FULL_MESSAGE,
         recoverable: true
       };
     }
     if (error.name === 'SecurityError') {
       return {
         type: StorageErrorType.STORAGE_DISABLED,
-        message: 'Storage is disabled (private browsing mode). Data cannot be saved.',
+        message: STORAGE_UNAVAILABLE_MESSAGE,
         recoverable: false
       };
     }
@@ -866,16 +903,48 @@ function createStorageError(error: unknown): StorageError {
 /**
  * Checks if localStorage is available and functional
  */
-export function isStorageAvailable(): boolean {
+/**
+ * 保存領域（localStorage）の状態。
+ * - 'ok': 読み書きできる
+ * - 'full': **存在するが満杯**（試し書きが容量超過で失敗）。読み出し・削除はできる
+ * - 'unavailable': 使えない（シークレットウィンドウ・サイトデータのブロックなど）
+ *
+ * 以前は「試し書きが失敗＝使えない」とひとまとめにしていたため、履歴で 10MB を使い切ると
+ * 作品一覧が空に見え、ホームから抜け出せなくなった（運用者の実測 2026-09-05・Issue #641）。
+ * 満杯は「読める・消せる」ので、一覧・開く・削除・書き出しを止めてはいけない。
+ */
+export type StorageCapacityState = 'ok' | 'full' | 'unavailable';
+
+/** 容量超過の例外か（ブラウザごとに名前・コードが違うので広めに見る） */
+export function isQuotaExceededError(error: unknown): boolean {
+  if (!(error instanceof DOMException)) return false;
+  return error.name === 'QuotaExceededError'
+    || error.name === 'NS_ERROR_DOM_QUOTA_REACHED'
+    || error.code === 22
+    || error.code === 1014;
+}
+
+export function getStorageCapacityState(): StorageCapacityState {
   try {
     const testKey = '__storage_test__';
     localStorage.setItem(testKey, 'test');
     localStorage.removeItem(testKey);
-    return true;
-  } catch {
-    return false;
+    return 'ok';
+  } catch (error) {
+    return isQuotaExceededError(error) ? 'full' : 'unavailable';
   }
 }
+
+/** 保存領域が存在するか（満杯でも true。書けるかどうかは書き込み時の例外で判定する） */
+export function isStorageAvailable(): boolean {
+  return getStorageCapacityState() !== 'unavailable';
+}
+
+/** 満杯・使えないときに利用者へ見せる文言（ホーム・ファイルタブ・保存失敗の通知で共用） */
+export const STORAGE_FULL_MESSAGE =
+  '保存領域が満杯です（この端末のブラウザ保存・約10MB）。新しい編集は保存されません。作品一覧から不要な作品を削除するか、「書き出し」でファイルへ退避してください';
+export const STORAGE_UNAVAILABLE_MESSAGE =
+  'この画面では保存ができません（ブラウザが保存領域を許可していません）。編集した内容は残りません。シークレットウィンドウの場合は通常のウィンドウで開き直してください';
 
 /** 保存先スロット1組ぶんのキー名 */
 interface StorageSlotKeys {
@@ -908,7 +977,7 @@ function saveScoreDataToSlot(data: SavedScoreData, keys: StorageSlotKeys): Stora
         success: false,
         error: {
           type: StorageErrorType.STORAGE_DISABLED,
-          message: 'localStorage is not available',
+          message: STORAGE_UNAVAILABLE_MESSAGE,
           recoverable: false
         }
       };
@@ -927,6 +996,13 @@ function saveScoreDataToSlot(data: SavedScoreData, keys: StorageSlotKeys): Stora
           }))
         : (data as any).parts,
     };
+    // 弱起の不変条件（拍子未満・全パート同値）を保存の境界で正す（#473 round3 P1-2）。
+    // 弾くと「その瞬間から自動保存が止まる」ので、落として保存する
+    if (Array.isArray(normalizedData.parts)) {
+      normalizedData.parts = sanitizePickupBeatsInParts(
+        normalizedData.parts, normalizeTimeSignature(normalizedData.timeSignature),
+      );
+    }
 
     // 保存前の検証（Issue #282）。連符グループが分断されたデータを書き出そうとしていたら、
     // それを作った編集操作にバグがあるということなので、開発中に気づけるよう警告を出す。
@@ -1019,7 +1095,7 @@ function loadScoreDataFromSlot(keys: StorageSlotKeys): StorageResult<SavedScoreD
         success: false,
         error: {
           type: StorageErrorType.STORAGE_DISABLED,
-          message: 'localStorage is not available',
+          message: STORAGE_UNAVAILABLE_MESSAGE,
           recoverable: false
         }
       };
@@ -1165,7 +1241,7 @@ function clearStoredDataInSlot(keys: StorageSlotKeys): StorageResult<boolean> {
         success: false,
         error: {
           type: StorageErrorType.STORAGE_DISABLED,
-          message: 'localStorage is not available',
+          message: STORAGE_UNAVAILABLE_MESSAGE,
           recoverable: false
         }
       };
@@ -1292,7 +1368,7 @@ function createInvalidWorkIdError(): StorageError {
 function createStorageDisabledError(): StorageError {
   return {
     type: StorageErrorType.STORAGE_DISABLED,
-    message: 'localStorage is not available',
+    message: STORAGE_UNAVAILABLE_MESSAGE,
     recoverable: false
   };
 }
@@ -1393,10 +1469,15 @@ export function pushWorkHistoryGeneration(
   if (!options?.force && history.length > 0 && now - history[0].timestamp < WORK_HISTORY_MIN_INTERVAL_MS) {
     return { success: true, data: false };
   }
+  // 世代も保存と同じ境界の正規化を通す（#473 round4 P2-2: 生データのまま積むと、読み出しの
+  // 検証で世代ごと黙って落ちる）
+  const sanitizedData: SavedScoreData = Array.isArray(data.parts)
+    ? { ...data, parts: sanitizePickupBeatsInParts(data.parts, normalizeTimeSignature(data.timeSignature)) }
+    : data;
   const newGeneration: WorkHistoryGeneration = {
     timestamp: now,
-    checksum: generateChecksum(JSON.stringify(data)),
-    data,
+    checksum: generateChecksum(JSON.stringify(sanitizedData)),
+    data: sanitizedData,
   };
   let next: WorkHistoryGeneration[] = [newGeneration, ...history].slice(0, WORK_HISTORY_MAX_GENERATIONS);
   const key = getWorkStorageKeys(workId).history;

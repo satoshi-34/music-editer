@@ -50,7 +50,7 @@ describe('ScorePage: 松葉＞の呼び名（#444）', () => {
       name: 'デクレッシェンドの松葉＞（開始音符から終了音符へドラッグ）',
     });
     expect(hairpin).toBeTruthy();
-    expect(hairpin.getAttribute('title')).toBe('デクレッシェンドの松葉＞（開始音符から終了音符へドラッグ）');
+    expect(hairpin.getAttribute('data-tip')).toBe('デクレッシェンドの松葉＞（開始音符から終了音符へドラッグ）');
     // 旧文言（松葉としてのディミヌエンド）がボタン名に残っていない。
     // 文字表記の dim. ボタン（ディミヌエンド（対象の音符をクリック））は別記号なので対象外
     expect(screen.queryByRole('button', { name: /ディミヌエンドの松葉/ })).toBeNull();

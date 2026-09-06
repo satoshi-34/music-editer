@@ -16,12 +16,11 @@ import type { Tool } from '../components/Palette';
 import type { ScoreType } from '../types/storage';
 import { articulationLabel } from './articulationUtils';
 import {
-  accidentalLabel,
   accidentalSymbol,
   durationLabel,
   dynamicSymbol,
   endingLabel,
-  microtoneLabel,
+  microtoneSymbol,
   pianoLayerLabel,
   repeatLabel,
   toolbarTabLabel,
@@ -97,15 +96,16 @@ export function describeTool(tool: Tool, customSymbolNames?: Record<string, stri
     const base = `${durationLabel(tool.duration)}${tool.isRest ? '休符' : '音符'}`;
     const dotted = tool.dots === 1 ? `付点${base}` : base;
     const grouped = tool.tuplet ? `${tool.tuplet.numNotes}連符（${dotted}）` : dotted;
-    // 入力時に付ける臨時記号（Issue #470）は、ONになっていることが一番気づきにくい状態なので
-    // 「♯付き」と頭に付けて、置いた音に記号が付く理由がバーだけで分かるようにする
-    return tool.accidental ? `${accidentalSymbol(tool.accidental)}付き${grouped}` : grouped;
+    // 臨時記号（Issue #470 → #548 で統合）は、ONになっていることが一番気づきにくい状態なので
+    // 「♯付き」と頭に付けて、置いた音に記号が付く理由がバーだけで分かるようにする。
+    // 微分音（¼♯・¼♭）も同じ属性になったので同じ形で出す
+    if (tool.accidental) return `${accidentalSymbol(tool.accidental)}付き${grouped}`;
+    if (tool.microtone) return `${microtoneSymbol(tool.microtone)}付き${grouped}`;
+    return grouped;
   }
   switch (tool.mode) {
     case 'select': return '小節選択';
     case 'tie': return 'タイ';
-    case 'accidental': return accidentalLabel(tool.accidental);
-    case 'microtone': return microtoneLabel(tool.type);
     case 'repeat': return repeatLabel(tool.repeat);
     case 'ending': return endingLabel(tool.ending);
     case 'dynamic': return dynamicSymbol(tool.dynamic);
@@ -120,6 +120,7 @@ export function describeTool(tool: Tool, customSymbolNames?: Record<string, stri
     case 'textElement': return textElementLabel(tool.textKind);
     case 'measureTempo': return '途中テンポ変更';
     case 'measureTimeSig': return '途中拍子変更';
+    case 'measurePickup': return '弱起（アウフタクト）';
     case 'measureKeySig': return '途中調号変更';
     case 'measureClef': return '途中音部記号変更';
     case 'measureRehearsal': return 'リハーサルマーク';

@@ -16,14 +16,21 @@
 //    （削除・貼り付け・Undo 等）を各リスナーの入口で無視させる（inert は
 //    フォーカスが body にあるときの window リスナーまでは止められないため）
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import ScorePage, { type HomeActionResult, type ScorePageHomeActions } from './components/ScorePage';
 import HomeScreen, { type HomeOpenKind } from './components/HomeScreen';
+import InstantTooltip from './components/InstantTooltip';
 import type { ScoreType, WorkSummary } from './types/storage';
 import type { ToolbarTab } from './utils/editorContextLabels';
 import { getLastOpenedWorkId, hasStoredData, listWorks } from './utils/storage';
 import { getOmrApiUrl } from './utils/omrApi';
 import { APP_VERSION } from './utils/appVersion';
+
+// 開発環境限定の定数チューニングパネル（#596）。動的 import と DEV ガードを
+// 同一関数（このモジュール評価時の三項）に置き、本番バンドルへコードごと含めない
+const DevTuningPanel = import.meta.env.DEV
+  ? lazy(() => import('./components/DevTuningPanel'))
+  : null;
 import { setHomeShown } from './utils/homeVisibility';
 import './App.css';
 
@@ -54,7 +61,20 @@ function resolveAvailableOpenKinds(): HomeOpenKind[] {
 
 export default function App() {
   // 起動時はホームから始める（受入条件1）。譜面画面は裏で復元を進めている
-  const [showHome, setShowHome] = useState(true);
+  const [showHome, setShowHome] = useState<boolean>(() => {
+    // dev チューニングの「反映（再読み込み）」直後だけホームを飛ばして譜面へ直帰する
+    // （#596 運用者フィードバック:「反映を押すとホームに戻る」— 調整ループの摩擦解消）。
+    // sessionStorage の一回きりフラグで、通常の起動（#528 のホーム表示）は変えない
+    if (import.meta.env.DEV) {
+      try {
+        if (window.sessionStorage.getItem('dev-tuning-skip-home') === '1') {
+          window.sessionStorage.removeItem('dev-tuning-skip-home');
+          return false;
+        }
+      } catch { /* sessionStorage が使えない環境では通常どおりホームへ */ }
+    }
+    return true;
+  });
   const homeActionsRef = useRef<ScorePageHomeActions | null>(null);
   // 操作口が入る前にホームのボタンが押された場合の持ち越し（round1 P2）。
   // 捨てると「押したのに何も起きない」無言の失敗になる（#318）。
@@ -182,6 +202,13 @@ export default function App() {
 
   return (
     <>
+      {/* 即時ツールチップ（#633）。data-tip を持つ要素のホバーを document で拾うので、アプリに1つだけ */}
+      <InstantTooltip />
+      {DevTuningPanel && (
+        <Suspense fallback={null}>
+          <DevTuningPanel />
+        </Suspense>
+      )}
       {/* inert: ホーム表示中は譜面画面をフォーカス・クリック・支援技術から切り離す
           （round1 P1）。React 19 は inert を boolean 属性として扱える */}
       <div inert={showHome} data-testid="score-page-holder">

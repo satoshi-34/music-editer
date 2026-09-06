@@ -86,6 +86,21 @@ async function renderScore(scoreType: ScoreType = 'single') {
   }, { timeout: 15000 });
 }
 
+/**
+ * レイアウトタブ（＝整えるモード・Issue #571）を開く。
+ * #571 round2 P2-2 で、境界帯は**このモードの間だけ**出す仕様になった
+ * （音符・休符タブでは帯も面も出さない＝譜面を書いている間の見た目を変えない）。
+ * 帯を触るテストは、まずこのタブを開いてから段を選ぶ。
+ */
+function openLayoutTab() {
+  fireEvent.click(screen.getByRole('tab', { name: 'レイアウト' }));
+}
+
+/** 音符・休符タブ（既定のタブ）へ戻す。整えるモードを抜けるので掴みしろは消える */
+function openNotesTab() {
+  fireEvent.click(screen.getByRole('tab', { name: '音符・休符' }));
+}
+
 /** 画面に出ている段（選択できるもの）の先頭小節を、上から順に並べて返す */
 function systemStartMeasures(): number[] {
   return Array.from(document.querySelectorAll('[data-testid^="system-frame-"]'))
@@ -103,6 +118,8 @@ function frameMarginTop(startMeasure: number): string {
  * 番号を決め打たずに上から順に選び直して最初に帯が出た段を使う。
  */
 async function selectSystemWithBoundary(): Promise<{ start: number; aboveStart: number; handle: HTMLElement }> {
+  // 帯は整えるモード中だけ出る（#571 round2 P2-2）
+  openLayoutTab();
   const starts = systemStartMeasures();
   for (let i = 1; i < starts.length; i++) {
     fireEvent.click(screen.getByTestId(`system-select-left-${starts[i]}`));
@@ -139,12 +156,17 @@ describe('ScorePage: 段の境界ドラッグで段の間隔を変える（Issue
   });
 
   it('選択していない段には境界帯が出ない（譜面上に常設物を残さない）', async () => {
+    // 音符・休符タブ（既定）での話。整えるモード中は選択していない段にも帯が出るのが
+    // #571 の仕様なので、この「常設物を残さない」原則は譜面を書くタブで守られていればよい
     await renderScore();
     expect(document.querySelector('.system-gap-drag-handle')).toBeNull();
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('ページの先頭の段には帯を出さない（上に動かせる境界が無いため・round1 P1）', async () => {
     await renderScore();
+    // 帯が出る条件（整えるモード）を満たしたうえで、それでも先頭の段には出ないことを見る。
+    // モードを開かないと「タブが違うから出ない」だけになり、先頭判定の検出力が無くなる
+    openLayoutTab();
     const firstStart = systemStartMeasures()[0];
     fireEvent.click(screen.getByTestId(`system-select-left-${firstStart}`));
     await waitFor(() => {
@@ -254,7 +276,7 @@ describe('ScorePage: 段の境界ドラッグで段の間隔を変える（Issue
     // 段数/ページを1にすると、2段目が「2ページ目の先頭」になる。
     // 先頭判定を「譜面全体の最初の段だけ」（systemIndex > 0）へ退行させると、
     // ここで帯が出てしまう
-    fireEvent.click(screen.getByRole('tab', { name: 'レイアウト' }));
+    openLayoutTab();
     fireEvent.change(screen.getByLabelText('段数/ページ'), { target: { value: '1' } });
 
     const second = systemStartMeasures()[1];
@@ -265,7 +287,11 @@ describe('ScorePage: 段の境界ドラッグで段の間隔を変える（Issue
     expect(screen.queryByTestId(`system-gap-drag-${second}`)).toBeNull();
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
-  it('ドラッグ中に Esc で選択が解けても、確定済みの Undo 履歴が壊れない（round2 P2）', async () => {
+  it('ドラッグ中に帯がアンマウントされても、確定済みの Undo 履歴が壊れない（round2 P2）', async () => {
+    // 元は「ドラッグ中に Esc で選択が解ける」手順だったが、#571 round2 P2-2 で帯は
+    // 整えるモード中は**選択していない段にも出る**ようになったため、選択が解けても帯は消えない。
+    // 帯が消えるのはモードを抜けたとき（音符・休符タブへ戻る）なので、そちらへ手順を移した。
+    // 見ている中身（アンマウント＝pointercancel 扱い・退避の残留が次のドラッグを壊さない）は同じ。
     await renderScore();
     const first = await selectSystemWithBoundary();
 
@@ -275,22 +301,24 @@ describe('ScorePage: 段の境界ドラッグで段の間隔を変える（Issue
     fireEvent.pointerUp(window, { pointerId: 1, clientX: 300, clientY: 220 });
     await waitFor(() => { expect(frameMarginTop(first.start)).toBe('20px'); });
 
-    // 2回目: ドラッグの途中で Esc → 帯ごとアンマウント。pointercancel と同じ扱いで
+    // 2回目: ドラッグの途中でタブを戻す → 帯ごとアンマウント。pointercancel と同じ扱いで
     // 値は掴む前（20px）へ戻り、積みかけた履歴も取り消される
     grab(first.handle, 200, 2);
     fireEvent.pointerMove(window, { pointerId: 2, clientX: 300, clientY: 230 });
     await waitFor(() => { expect(frameMarginTop(first.start)).toBe('50px'); });
-    fireEvent.keyDown(document, { key: 'Escape' });
+    openNotesTab();
     await waitFor(() => {
       expect(screen.queryByTestId(`system-gap-drag-${first.start}`)).toBeNull();
       expect(frameMarginTop(first.start)).toBe('20px');
     });
 
-    // 3回目: 再選択して、動かさずに掴んで離す。ここの onDragEnd(false) が
-    // 2回目の残留退避を消費すると、1回目の確定履歴まで消える（round2 P2 の再現手順）
-    const again = await selectSystemWithBoundary();
-    expect(again.start).toBe(first.start);
-    grab(again.handle, 200, 3);
+    // 3回目: モードへ戻して、同じ段の帯を動かさずに掴んで離す。ここの onDragEnd(false) が
+    // 2回目の残留退避を消費すると、1回目の確定履歴まで消える（round2 P2 の再現手順）。
+    // 段の選択はタブを戻しても残っているので、選び直さずに帯だけを掴む
+    // （左端の帯をもう一度クリックすると選択が解けてしまう）
+    openLayoutTab();
+    const again = await screen.findByTestId(`system-gap-drag-${first.start}`);
+    grab(again as HTMLElement, 200, 3);
     fireEvent.pointerUp(window, { pointerId: 3, clientX: 300, clientY: 200 });
 
     // Undo 1回で1回目のドラッグ前（上書きなし）へ戻れること
@@ -347,7 +375,7 @@ describe('ScorePage: 段の境界ドラッグで段の間隔を変える（Issue
     await renderScore();
     const { start, handle } = await selectSystemWithBoundary();
     const frame = screen.getByTestId(`system-frame-${start}`) as HTMLElement;
-    // 全体の「段の間隔」が -30px（ピアノ譜の既定）で効いている状態を作る。
+    // 全体の「段の間隔」が -30px（例: 旧ピアノ既定相当の詰め）で効いている状態を作る。
     // 起点に「いま効いている margin-top」を使う実装だと、-30 + 10 = -20px が
     // この段の上書きとして保存され、以後この段だけ全体設定へ追従しなくなる
     const realGetComputedStyle = window.getComputedStyle.bind(window);

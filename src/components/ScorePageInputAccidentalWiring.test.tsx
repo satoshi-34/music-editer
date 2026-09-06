@@ -101,7 +101,7 @@ describe('入力用臨時記号の配線（#470 round1 P2）', () => {
 
     // 4分音符 + 入力用♯ をON
     fireEvent.click(screen.getByRole('button', { name: '音符 4分' }));
-    const sharpToggleButton = screen.getByRole('button', { name: '入力時に付ける臨時記号: シャープ' });
+    const sharpToggleButton = screen.getByRole('button', { name: /^臨時記号: シャープ/ });
     fireEvent.click(sharpToggleButton);
     expect(sharpToggleButton.style.border).toContain('2px'); // ON になっている前提を固定
     clickAfterFirstNote();
@@ -133,7 +133,7 @@ describe('入力用臨時記号の配線（#470 round1 P2）', () => {
     await waitFor(() => { expect(document.querySelector('rect.vf-hit')).toBeTruthy(); }, { timeout: 15000 });
 
     fireEvent.click(screen.getByRole('button', { name: '音符 4分' }));
-    const sharpToggle = screen.getByRole('button', { name: '入力時に付ける臨時記号: シャープ' });
+    const sharpToggle = screen.getByRole('button', { name: /^臨時記号: シャープ/ });
     fireEvent.click(sharpToggle);
     expect(sharpToggle.style.border).toContain('2px'); // ON 表示
 

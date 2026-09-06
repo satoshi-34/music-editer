@@ -568,6 +568,27 @@ export function describeDoubleAccidentalKeySignatureUnavailable(kind: '##' | 'bb
 }
 
 /**
+ * 微分音（¼♯・¼♭）のツールで調号領域をクリックしたときの案内（Issue #548）。
+ * 統合で「空きクリック＝音符を置く」に変わったため、無言で調号の上に音符を生やさないよう、
+ * ここで消費して理由を伝える（#318「行き止まりは喋る」）。
+ */
+export function describeMicrotoneKeySignatureUnavailable(): string {
+  return '四分音（¼♯・¼♭）は調号には使えません（調号にあるのは♯と♭だけです）。付けたい音符をクリックしてください';
+}
+
+/**
+ * 臨時記号・四分音を付けようとしたが、押した音が最新のデータに見つからなかったときの案内
+ * （Issue #548 round2 P2-2）。
+ *
+ * 当たり判定は VexFlow が描いた図形から作るため、描画がデータより1手遅れている間は
+ * クリックした位置の音がもう無いことがある。ここで黙って別の音へ付けると
+ * 「押していない音に記号が付く」ので、付けずに理由を伝える（#318「行き止まりは喋る」）。
+ */
+export function describeAccidentalTargetNoteLost(): string {
+  return '記号を付ける音が見つかりませんでした（譜面が変わった可能性があります）。もう一度その音符をクリックしてください';
+}
+
+/**
  * MusicXML 読込で大譜表のクレフをピアノ標準（上=ト・下=ヘ）へ正規化したときの通知（#419 round2）。
  * アプリのピアノモデルはクレフ固定のため任意クレフを保持できないが、keys（絶対音名）は
  * そのままなので音の高さは変わらない。黙って見た目が変わる自動処理は通知する（#318）。
@@ -677,18 +698,40 @@ export function describePlaybackFromMeasure(startMeasure: number): string {
 }
 
 /**
+ * 弱起（アウフタクト）を後から設定したとき、先頭小節に容量を超える音符が残っていることを
+ * 知らせる（Issue #473）。音符を黙って消すのは「無言で消える」事故（#238）と同じ形なので、
+ * データは変えずに事実と次の一手だけを伝える。
+ */
+export function describePickupOverflow(pickupBeats: number): string {
+  return `弱起を${pickupBeats}拍にしました。先頭小節にはこれを超える音符が残っています（いらない音符を選んで Delete で消せます）`;
+}
+
+/** 弱起（アウフタクト）を設定したことを知らせる（Issue #473） */
+export function describePickupSet(pickupBeats: number): string {
+  return `弱起を${pickupBeats}拍にしました（先頭小節は${pickupBeats}拍まで入り、小節番号は次の小節から1になります）`;
+}
+
+/** 弱起（アウフタクト）を解除したことを知らせる（Issue #473） */
+export function describePickupCleared(): string {
+  return '弱起（アウフタクト）を解除しました。先頭小節も拍子ぶんの長さになります';
+}
+
+/**
  * 小節番号を指定した途中再生（#545）: その小節から再生を始めたことを知らせる。
  * 戻し方（先頭から聴く方法）は選択の有無で違うため出し分ける（round1/2 P2）:
  * 小節の範囲選択が残っていると停止→再生は選択位置から始まるので、
  * まず Escape で選択を外す案内を先に出す。選択が無ければ停止→再生だけで先頭に戻る。
  */
-export function describePlaybackFromMeasureNumber(startMeasure: number, hasMeasureSelection: boolean): string {
+export function describePlaybackFromMeasureNumber(displayedMeasureNumber: number, hasMeasureSelection: boolean): string {
+  // 番号は画面に出ている小節番号（弱起があれば 0 始まり・#473）。呼び出し側が
+  // getDisplayedMeasureNumber で解決して渡す（ここで +1 しない）
+  const where = displayedMeasureNumber === 0 ? '弱起の小節' : `${displayedMeasureNumber}小節目`;
   // 小節の範囲選択が残っていると、停止→再生では選択位置から始まる（選択起点の途中再生）。
   // その状態で「停止して再生すれば先頭」と案内すると嘘になるため出し分ける（#545 round1 P2）
   if (hasMeasureSelection) {
-    return `${startMeasure + 1}小節目から再生します（先頭から聴くには Escape で小節の選択を外し、停止してから再生してください）`;
+    return `${where}から再生します（先頭から聴くには Escape で小節の選択を外し、停止してから再生してください）`;
   }
-  return `${startMeasure + 1}小節目から再生します（先頭から聴くには停止してから再生してください）`;
+  return `${where}から再生します（先頭から聴くには停止してから再生してください）`;
 }
 
 /**
@@ -697,13 +740,15 @@ export function describePlaybackFromMeasureNumber(startMeasure: number, hasMeasu
  */
 export function describePlaybackStartMeasureRejected(
   reason: PlaybackStartMeasureRejection,
-  totalMeasureCount: number
+  totalMeasureCount: number,
+  // 入力できる表示番号の範囲（弱起があれば 0 始まり・#473）。省略時は 1〜総小節数
+  range: { min: number; max: number } = { min: 1, max: totalMeasureCount }
 ): string {
   switch (reason) {
     case 'notANumber':
       return '小節番号は半角の数字で入力してください（例: 5 と入れると5小節目から再生します）';
     case 'outOfRange':
-      return `この作品は${totalMeasureCount}小節までのため、その小節からは再生できません（1〜${totalMeasureCount} の番号を入れてください）`;
+      return `この作品は${range.max}小節までのため、その小節からは再生できません（${range.min}〜${range.max} の番号を入れてください）`;
     case 'noMeasures':
       return 'まだ再生できる小節がありません（音符を入力してから小節番号を指定してください）';
   }
@@ -867,6 +912,22 @@ export function describeAudioEngineRestarted(destination: string): string {
   return `無音状態を検知したため、音声エンジンを自動で再起動しました。もう一度再生をお試しください。${destination}`;
 }
 
+/**
+ * 実音経路（マスターゲイン出口）そのものが無音だったときの通知（Issue #618）。
+ * このタブの音声経路が壊れている状態で、エンジンの作り直し（音声復旧）では
+ * 直らないことが実機で確認済みのため、案内は「タブを開き直す」の一手に絞る。
+ */
+/** 実音経路の無音を初めて観測したときの通知（#618 round2 P2: 初回は止めずに案内だけ） */
+export function describeAudioMainPathSuspected(): string {
+  return 'このタブの音声が出ていないようです。聞こえない場合は、タブを閉じて開き直してください（作った譜面は保存されています）。';
+}
+
+export function describeAudioMainPathBroken(): string {
+  // 音は1つも出ていないので再生も止める（#618 round1 P3）。止めたことを文言でも伝えて、
+  // 「押したのに勝手に止まった」と見えないようにする
+  return 'このタブの音声が出ていません。再生を止めました。タブを閉じて開き直してください（作った譜面は保存されています）。';
+}
+
 /** 自動再起動しても無音が続くときの通知（Issue #521 で出力先の案内を末尾に追加）。 */
 export function describeAudioStillSilent(destination: string): string {
   return `音声出力の異常が続いています。「音声復旧」ボタンか、ページの再読み込みをお試しください。${destination}`;
@@ -898,4 +959,21 @@ export function describeVoiceLimitReached(maxVoices: number): string {
  */
 export function describeVoiceLimitTrimmed(measureCount: number, maxVoices: number): string {
   return `${maxVoices}声を超える声部があったため、${measureCount}小節で${maxVoices + 1}声目以降を読み込みませんでした（このアプリは1つの段につき${maxVoices}声までです）`;
+}
+
+/**
+ * 先読み窓（#622）の後続の予約に失敗して再生を止めたときの通知。
+ * 無音のまま「再生中」表示が曲末まで進むのを避け、理由と次の一手を伝える（#318）
+ */
+export function describePlaybackAbortedBySchedulingError(): string {
+  return '再生の途中で音の予約に失敗したため停止しました。もう一度再生してください。続く場合は「音の調子がおかしいとき」の音声復旧をお試しください';
+}
+
+/**
+ * 作品の切替・復元が終わる前に再生を押したときの通知（#609）。
+ * 復元は非同期で、途中で押すと「画面は新しい作品なのに前の作品が鳴る」ことがあるため、
+ * 復元が終わるまでは再生を始めず、理由と次の一手だけ伝える（#318）
+ */
+export function describePlaybackBlockedWhileRestoringWork(): string {
+  return '作品を読み込んでいる途中です。読み込みが終わってから、もう一度「再生」を押してください';
 }

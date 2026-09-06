@@ -1,8 +1,13 @@
 import { beatSpanToSeconds, tempoSegmentsFrom } from '../utils/tempoPlaybackUtils';
+import { scheduleLeadSeconds } from './scheduleLead';
+import { limitPolyphony, maxPolyphony, type VoiceSpan } from './polyphonyLimit';
+import { createWindowedScheduler, lookaheadSeconds, type WindowedScheduler } from './scheduleWindow';
 import type { Player as SoundFontPlayer } from 'soundfont-player';
+import { createVelocityFilterChain, velocityToAttackSeconds, normalizeVelocityTimbreStrength } from './velocityTimbre';
 
-import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
+import type { PlaybackEngine, PlaybackPart, PlaybackScheduleInfo } from './PlaybackEngine';
 import type { PlaybackSoundProfile } from './playbackSettings';
+import { ensureMainPathAnalyser, tapOutputToMainPathAnalyser } from './mainPathAnalyser';
 import { DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS, getMasterVolumeGain } from './playbackSettings';
 import { InstrumentType } from './SoundSource';
 import { getDurationBeats, tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
@@ -143,9 +148,28 @@ export class SoundFontEngine implements PlaybackEngine {
 
   /** 作成中の player の共有置き場（キー = `${世代}:${soundfont}:${楽器}`・round4 P2） */
   private readonly playerLoading = new Map<string, Promise<SoundFontPlayer>>();
+  /** 進行中の先読み窓（#622）。stopAll で止める */
+  private activeScheduler: WindowedScheduler | null = null;
+  private readonly schedulingFailureListeners = new Set<(error: unknown) => void>();
+
+  onSchedulingFailure(listener: (error: unknown) => void): () => void {
+    this.schedulingFailureListeners.add(listener);
+    return () => { this.schedulingFailureListeners.delete(listener); };
+  }
+
+  /** 後続の窓の予約失敗を画面へ伝える（#622 round2 P2） */
+  private notifySchedulingFailure(error: unknown): void {
+    this.activeScheduler = null;
+    this.schedulingFailureListeners.forEach((listener) => {
+      try { listener(error); } catch (listenerError) { console.warn('[PlaybackEngine] 失敗通知の受け手で例外:', listenerError); }
+    });
+  }
   // すべての player の出力をこの GainNode 経由で destination へ流す。
   // ここの gain を変えるだけで全体音量（音量スライダー）が効く。
   private masterGainNode: GainNode | null = null;
+  // 診断専用: マスターゲインの出口を覗く AnalyserNode（issue #618）。
+  // destination には繋がないので音は増えない。context ごとに1つだけ持つ。
+  private mainPathAnalyser: AnalyserNode | null = null;
 
   constructor(soundfontName: string = DEFAULT_SOUNDFONT_NAME) {
     this.soundfontName = resolveSoundFontName(soundfontName);
@@ -180,14 +204,25 @@ export class SoundFontEngine implements PlaybackEngine {
     console.log('[SoundFontEngine] 音符を再生:', normalizedNote, duration, '秒');
   }
 
-  async playParts(parts: PlaybackPart[], bpm: number = 120): Promise<void> {
+  async playParts(parts: PlaybackPart[], bpm: number = 120): Promise<PlaybackScheduleInfo> {
     await this.initialize();
     const context = this.ensureContext();
     const playableParts = await Promise.all(parts.map(async (part) => ({
       part,
       player: await this.getPlayerForInstrument(part.instrument ?? this.currentInstrument),
     })));
-    const startTime = context.currentTime;
+    // 「今」に先読みリードを足す（#610: 予約ループの実時間ぶん先頭の音が過去にならないように）
+    const startTime = context.currentTime + scheduleLeadSeconds();
+    // 画面側の同期用に、起点を決めたこの瞬間の壁時計を返す（音源ロードの後・予約ループの前）
+    const scheduledAtMs = Date.now();
+
+    // 予約はいったん一覧に集めてから、同時発音数の上限（#605）を静的に適用して鳴らす。
+    // 一覧にする理由: 右手→左手の順に組み立てるため、鳴らしながらでは「その時点で何音
+    // 鳴っているか」が分からない。開始・終了時刻が全部そろってから詰める
+    // endTime は「音価・ペダル終端 + 余韻（release）」＝ノードが実際に生きている期間（round1 P1:
+    // 余韻を含めないと、詰めた古い音の余韻と新しい音が重なって上限を超える）。
+    // tail は詰めた後の長さを戻すために控える（duration' = endTime' − startTime − tail）
+    const voices: Array<VoiceSpan & { player: SoundFontPlayer; note: string; velocity: number; duration: number; tail: number }> = [];
 
     // 各パートは同じ「今この瞬間」を基準に予約する。
     // こうすると Promise を待たずに、和音や複数パートが同時にそろって鳴る。
@@ -281,11 +316,16 @@ export class SoundFontEngine implements PlaybackEngine {
                     ),
                   )
                 : tiedSoundDuration;
-              player.play(
-                this.normalizeNoteFormat(key),
-                eventStartTime,
-                this.buildPlaybackOptions(soundingDuration, velocity)
-              );
+              const tail = resolveReleaseTailSeconds(this.soundProfile.release, soundingDuration);
+              voices.push({
+                player,
+                note: this.normalizeNoteFormat(key),
+                velocity,
+                duration: soundingDuration,
+                tail,
+                startTime: eventStartTime,
+                endTime: eventStartTime + soundingDuration + tail,
+              });
             });
           }
           if (typeof event.startBeat !== 'number') {
@@ -316,7 +356,35 @@ export class SoundFontEngine implements PlaybackEngine {
       }
     });
 
-    console.log('[SoundFontEngine] 譜面再生をスケジュールしました:', parts.length, 'パート');
+    const limited = limitPolyphony(voices, maxPolyphony());
+    // 詰められた占有期間に「音本体 → 余韻」の順で収める（round2 P1: 余韻の全量を先に引くと、
+    // 余韻だけ切れば足りる短音まで丸ごと無音化する）。占有 0 以下の音は予約しない
+    const playable = limited.voices.filter((voice) => voice.endTime - voice.startTime > 0);
+    // ノードは曲全体を一括で作らず、先読み窓ぶんだけ逐次作る（#622: 一括生成だと
+    // まだ鳴っていないノードまで音声スレッドが毎量子処理し、序盤ほど途切れる）
+    this.activeScheduler?.stop();
+    const scheduler = createWindowedScheduler({
+      voices: playable,
+      now: () => context.currentTime,
+      play: (voice) => {
+        const occupancy = voice.endTime - voice.startTime;
+        const duration = Math.min(voice.duration, occupancy);
+        const release = Math.max(0, occupancy - duration);
+        const node = voice.player.play(voice.note, voice.startTime, this.buildPlaybackOptions(duration, voice.velocity, release));
+        this.applyVelocityTimbre(context, voice.player, node, voice.velocity);
+      },
+      onError: (error) => {
+        console.warn('[SoundFontEngine] 窓の予約に失敗したため以後の予約を止めます:', error);
+        this.notifySchedulingFailure(error);
+      },
+    });
+    this.activeScheduler = scheduler;
+    scheduler.start();
+
+    console.log('[SoundFontEngine] 譜面再生をスケジュールしました:', parts.length, 'パート',
+      `ボイス ${voices.length} / 最大同時 ${limited.peakBefore} / 詰め ${limited.stolen}（うち無音化 ${limited.dropped}）/ 上限 ${maxPolyphony()}`,
+      `/ 先読み窓 ${lookaheadSeconds()}s で先頭 ${scheduler.stats().scheduled} 音を予約`);
+    return { scheduledAtMs };
   }
 
   async suspend(): Promise<void> {
@@ -332,6 +400,9 @@ export class SoundFontEngine implements PlaybackEngine {
   }
 
   stopAll(): void {
+    // 以後の窓は作らない（#622）。作成済みの音は下で止める
+    this.activeScheduler?.stop();
+    this.activeScheduler = null;
     const stopTime = this.context?.currentTime;
     this.playerCache.forEach(player => {
       try {
@@ -374,8 +445,9 @@ export class SoundFontEngine implements PlaybackEngine {
         this.context.close();
         this.context = null;
       }
-      // 閉じた context に属する GainNode は再利用できないため捨てる
+      // 閉じた context に属する GainNode・AnalyserNode は再利用できないため捨てる
       this.masterGainNode = null;
+      this.mainPathAnalyser = null;
       console.log('[SoundFontEngine] リソースを解放しました');
     } catch (error) {
       console.error('[SoundFontEngine] dispose中にエラーが発生しました:', error);
@@ -401,6 +473,53 @@ export class SoundFontEngine implements PlaybackEngine {
     console.log('[SoundFontEngine] スウィング再生を切り替えました:', enabled);
   }
 
+  /** 強弱を音色にも効かせる（#670）。既定 ON */
+  private velocityTimbreEnabled = true;
+  private velocityTimbreStrength = 1;
+  setVelocityTimbreEnabled(enabled: boolean): void {
+    this.velocityTimbreEnabled = enabled;
+  }
+
+  setVelocityTimbreStrength(strength: number): void {
+    this.velocityTimbreStrength = normalizeVelocityTimbreStrength(strength);
+  }
+
+  /**
+   * soundfont-player の play() が返す音ノード（GainNode）を、player の出力ではなく
+   * velocity で決めたローパス経由でマスターゲインへつなぎ直す（#670）。
+   * play() は内部で node→out→destination と配線してしまうので、いったん外してから挟む。
+   * フィルタを作れない context・想定外のノードでは何もしない（従来どおり鳴る）
+   */
+  private applyVelocityTimbre(context: AudioContext, player: SoundFontPlayer, node: unknown, velocity: number): void {
+    if (!this.velocityTimbreEnabled) return;
+    const audioNode = node as { connect?: (dest: AudioNode) => unknown; disconnect?: (dest?: AudioNode) => void } | null;
+    if (!audioNode || typeof audioNode.connect !== 'function' || typeof audioNode.disconnect !== 'function') return;
+    // sample-player は player.out（出力の GainNode）を公開している。外すときはそこだけを外し、
+    // 失敗したらそこへ戻す（round1 P2: 外した後に失敗すると無音になる）。
+    // player.out が無い想定外の player では配線を触らない（round2 P2-1: 引数なしの disconnect は
+    // 挟んだばかりのフィルタへの接続も切ってしまい無音になる）→ 従来どおり鳴らす
+    const playerOut = (player as unknown as { out?: AudioNode }).out;
+    if (!playerOut) return;
+    const chain = createVelocityFilterChain(context, velocity, this.velocityTimbreStrength);
+    if (!chain) return;
+    try {
+      // 先にフィルタ→マスターを結んでから音ノードをフィルタへ。最後に player の出力から外す
+      chain.output.connect(this.getOutputNode(context));
+      audioNode.connect(chain.input);
+      audioNode.disconnect(playerOut);
+    } catch (error) {
+      console.warn('[SoundFontEngine] 強弱の音色変化を配線できませんでした（素通しで鳴らします）:', error);
+      try {
+        // 途中まで進んでいた配線を戻す: フィルタを外し、player の出力へつなぎ直す
+        for (const n of chain.nodes) n.disconnect?.();
+        audioNode.disconnect();
+        audioNode.connect(playerOut);
+      } catch {
+        // ここで失敗したらその音だけ鳴らない。再生全体は止めない（#358 の教訓）
+      }
+    }
+  }
+
   /**
    * player の接続先（マスター GainNode）を返す。
    * AudioContext が作り直されたときは古い GainNode を使えないため、
@@ -411,6 +530,10 @@ export class SoundFontEngine implements PlaybackEngine {
       this.masterGainNode = context.createGain();
       this.masterGainNode.gain.value = getMasterVolumeGain(this.soundProfile);
       this.masterGainNode.connect(context.destination);
+      // 実音の有無を測るための枝を張り直す（issue #618）。
+      // マスターゲインは停止のたびに作り直されることがあるので、そのたびに繋ぎ直す。
+      this.mainPathAnalyser = ensureMainPathAnalyser(context, this.mainPathAnalyser);
+      tapOutputToMainPathAnalyser(this.masterGainNode, this.mainPathAnalyser);
     }
     return this.masterGainNode;
   }
@@ -428,6 +551,14 @@ export class SoundFontEngine implements PlaybackEngine {
    */
   getAudioContext(): AudioContext | null {
     return this.context;
+  }
+
+  /**
+   * 診断専用: 実音経路（マスターゲイン直後）の AnalyserNode を返す（issue #618）。
+   * まだ一度も発音していない場合は null（マスターゲインと同時に用意されるため）。
+   */
+  getMainPathAnalyser(): AnalyserNode | null {
+    return this.mainPathAnalyser;
   }
 
   private async getPlayerForCurrentInstrument(): Promise<SoundFontPlayer> {
@@ -546,7 +677,11 @@ export class SoundFontEngine implements PlaybackEngine {
     return note;
   }
 
-  private buildPlaybackOptions(duration: number, velocity: number = 0.5) {
+  /**
+   * @param releaseOverride 余韻の長さを直接指定する（同時発音数の上限で詰められた音・#605）。
+   *   省略時は releaseTail.ts の共通計算
+   */
+  private buildPlaybackOptions(duration: number, velocity: number = 0.5, releaseOverride?: number) {
     const { brightness, attack, release, richness } = this.soundProfile;
 
     // SoundFont 側は元サンプルのキャラが強いので、
@@ -560,12 +695,13 @@ export class SoundFontEngine implements PlaybackEngine {
       // gain は音色キャラに加えて、強弱記号から来た velocity でも上下させる。
       // ただし極端な値は歪みや無音の原因になるため、最後に安全域へ丸める。
       gain: Math.max(0.05, Math.min(1, (0.45 + brightness * 0.15 + richness * 0.35) * velocity)),
-      attack: 0.001 + attack * 0.04,
+      // 弱い音は立ち上がりも鈍らせる（#670 段2）。確認音（velocity 既定 0.5）と設定 OFF は従来どおり
+      attack: this.velocityTimbreEnabled ? velocityToAttackSeconds(velocity, 0.001 + attack * 0.04, this.velocityTimbreStrength) : 0.001 + attack * 0.04,
       // 以前は release=0.05〜0.5 と「duration に release×0.15 を足す」の合わせ技だったが、
       // 全音符でも尻尾が 0.3 秒に届かず「早く切られた」印象になっていた（Issue #525）。
       // 尻尾の長さは内蔵音源と共通の計算（releaseTail.ts）へ一本化し、
       // duration は記譜どおりに戻す（音の開始位置・次の音までの間隔は変わらない）
-      release: resolveReleaseTailSeconds(release, duration),
+      release: releaseOverride ?? resolveReleaseTailSeconds(release, duration),
       duration
     };
   }

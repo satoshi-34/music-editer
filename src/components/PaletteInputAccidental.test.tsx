@@ -4,7 +4,10 @@
 //   - 音符・休符タブに「入力時に付ける臨時記号」のトグルがあり、押すと音価ツールへ accidental が乗る
 //   - もう一度押すと外れる（付点・連符トグルと同じ流儀）
 //   - 休符ツールを持ったままONにすると、同じ音価の「音符」へ切り替わる（休符に臨時記号は付かないため）
-//   - 既存の「すでにある音符へ付ける」♯/♭/♮ ツール（mode: 'accidental'）は今までどおり
+//
+// Issue #548 でパレットを統合したため、ラベルが `臨時記号: X` から
+// `臨時記号: X` へ変わり、「すでにある音符へ付ける」別家族は無くなった（付与は符頭クリックで行う）。
+// 旧・付与家族のボタンが消えたことは AccidentalPaletteUnification.acceptance.test.tsx のケース10 が固定している。
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent, cleanup } from '@testing-library/react';
 
@@ -24,8 +27,10 @@ describe('Palette 入力時に付ける臨時記号（Issue #470）', () => {
       <Palette value={{ duration: '4', isRest: false }} onChange={onChange} section="notes" />
     );
 
-    fireEvent.click(buttonByLabelPrefix(container, '入力時に付ける臨時記号: シャープ'));
-    expect(onChange).toHaveBeenCalledWith({ duration: '4', isRest: false, accidental: 'sharp' });
+    fireEvent.click(buttonByLabelPrefix(container, '臨時記号: シャープ'));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ duration: '4', isRest: false, accidental: 'sharp', microtone: undefined })
+    );
     cleanup();
   });
 
@@ -39,7 +44,7 @@ describe('Palette 入力時に付ける臨時記号（Issue #470）', () => {
       />
     );
 
-    fireEvent.click(buttonByLabelPrefix(container, '入力時に付ける臨時記号: フラット'));
+    fireEvent.click(buttonByLabelPrefix(container, '臨時記号: フラット'));
     expect(onChange).toHaveBeenCalledWith({
       duration: '8',
       isRest: false,
@@ -56,7 +61,7 @@ describe('Palette 入力時に付ける臨時記号（Issue #470）', () => {
       <Palette value={{ duration: '4', isRest: false, accidental: 'sharp' }} onChange={onChange} section="notes" />
     );
 
-    fireEvent.click(buttonByLabelPrefix(container, '入力時に付ける臨時記号: シャープ'));
+    fireEvent.click(buttonByLabelPrefix(container, '臨時記号: シャープ'));
     expect(onChange).toHaveBeenCalledWith({ duration: '4', isRest: false, accidental: undefined });
     cleanup();
   });
@@ -67,20 +72,32 @@ describe('Palette 入力時に付ける臨時記号（Issue #470）', () => {
       <Palette value={{ duration: '8', isRest: true }} onChange={onChange} section="notes" />
     );
 
-    fireEvent.click(buttonByLabelPrefix(container, '入力時に付ける臨時記号: ナチュラル'));
+    fireEvent.click(buttonByLabelPrefix(container, '臨時記号: ナチュラル'));
     expect(onChange).toHaveBeenCalledWith({ duration: '8', isRest: undefined, accidental: 'natural' });
     cleanup();
   });
 
-  it('既存の「音符へ付ける」臨時記号ツールは今までどおり mode: accidental を返す', () => {
-    const onChange = vi.fn();
+  it('ホバーで「その音だけ」か「その小節から先」かが分かる（Issue #633）。文言は即時ツールチップ（data-tip）に載る', () => {
     const { container } = render(
-      <Palette value={{ duration: '4', isRest: false }} onChange={onChange} section="notes" />
+      <Palette value={{ duration: '4', isRest: false }} onChange={vi.fn()} section="notes" />
     );
-
-    // 適用ツール側の aria-label は「シャープ（選択して音符をクリック）」で始まる
-    fireEvent.click(buttonByLabelPrefix(container, 'シャープ（'));
-    expect(onChange).toHaveBeenCalledWith({ mode: 'accidental', accidental: 'sharp' });
+    const sharp = buttonByLabelPrefix(container, '臨時記号: シャープ');
+    expect(sharp.getAttribute('data-tip')).toContain('クリックした音だけ半音上げる');
+    // 途中調号変更は演奏記号タブ（section="symbols"）側にある
+    const symbols = render(
+      <Palette value={{ duration: '4', isRest: false }} onChange={vi.fn()} section="symbols" />
+    );
+    const keyChange = symbols.container.querySelector('button[aria-label^="途中調号変更"]') as HTMLButtonElement | null;
+    expect(keyChange, '途中調号変更のボタン').toBeTruthy();
+    expect(keyChange!.getAttribute('data-tip')).toContain('クリックした小節から先');
+    // プルダウンの項目にも効く量の説明が付く
+    fireEvent.click(container.querySelector('button[aria-label^="シャープ系の種類を選ぶ"]') as HTMLButtonElement);
+    const doubleSharp = container.querySelector('button[aria-label^="臨時記号: ダブルシャープ"]') as HTMLButtonElement | null;
+    expect(doubleSharp, '𝄪 の項目').toBeTruthy();
+    expect(doubleSharp!.getAttribute('data-tip')).toContain('全音');
+    const quarter = container.querySelector('button[aria-label^="臨時記号: 四分音上げ"]') as HTMLButtonElement | null;
+    expect(quarter, '¼♯ の項目').toBeTruthy();
+    expect(quarter!.getAttribute('data-tip')).toContain('半音の半分');
     cleanup();
   });
 });

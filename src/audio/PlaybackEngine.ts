@@ -85,10 +85,21 @@ export interface PlaybackPart {
  * ScorePage から見た「再生エンジンの共通窓口」。
  * 内蔵音源でも SoundFont でも、画面側は同じメソッド名で扱えるようにする。
  */
+/**
+ * playParts が返す「実音の起点」。エンジンが `currentTime + 先読みリード` を確定した瞬間の
+ * Date.now()（#610 round2 P1）。SoundFont は音源ロードを待ってから起点を決めるため、
+ * 画面側が呼び出し時刻を起点にすると、ロード時間ぶんハイライトと終了が実音より早まる。
+ * 画面側はこの値からの経過時間だけを「予約に使った実時間」として差し引く。
+ */
+export interface PlaybackScheduleInfo {
+  scheduledAtMs: number;
+}
+
 export interface PlaybackEngine {
   initialize(): Promise<void>;
   playNoteByName(note: string, duration?: number): Promise<void>;
-  playParts(parts: PlaybackPart[], bpm?: number): Promise<void>;
+  /** 戻り値は実音の起点（PlaybackScheduleInfo）。テストの偽エンジンは省略してよい */
+  playParts(parts: PlaybackPart[], bpm?: number): Promise<PlaybackScheduleInfo | void>;
   suspend(): Promise<void>;
   resume(): Promise<void>;
   stopAll(): void;
@@ -102,9 +113,29 @@ export interface PlaybackEngine {
    */
   setSwingEnabled(enabled: boolean): void;
   /**
+   * 強弱を音色にも効かせる（velocity → ローパスのカットオフ・Issue #670）の ON/OFF。
+   * optional なのは、既存テストの偽エンジン（createPlaybackEngine の vi.mock・約 20 ファイル）が
+   * この項目を持たないため。両方の実エンジン（SimpleAudioEngine / SoundFontEngine）は実装している。
+   * 呼び出し側は必ず `?.()` で呼び、createPlaybackEngine でも生成直後に反映する
+   */
+  setVelocityTimbreEnabled?(enabled: boolean): void;
+  /** 強弱→音色の効きの強さ（0〜1）。optional の理由は setVelocityTimbreEnabled と同じ */
+  setVelocityTimbreStrength?(strength: number): void;
+  /**
    * 診断専用: 内部の AudioContext を返す（未初期化なら null）。
    * Safari silent failure（issue #14）のヘルスチェックが
    * currentTime の進行などを観測するために使う。再生制御には使わないこと。
    */
   getAudioContext?(): AudioContext | null;
+  /**
+   * 診断専用: 実音経路（マスターゲイン直後）に常設した AnalyserNode を返す（issue #618）。
+   * ヘルスチェックが「実際にスピーカーへ向かっている信号」の振幅を測るために使う。
+   * 用意できない環境では null を返してよい（診断できないだけで再生には影響しない）。
+   */
+  getMainPathAnalyser?(): AnalyserNode | null;
+  /**
+   * 先読み窓（#622）の後続の予約が失敗したときの通知。playParts が返った後に起きる失敗は
+   * 戻り値では伝えられないので、画面側はこれで停止・通知する。戻り値は解除関数
+   */
+  onSchedulingFailure?(listener: (error: unknown) => void): () => void;
 }

@@ -229,6 +229,11 @@ worktree を共有 dev サーバー経由で開き、上のフィクスチャを
   （VexFlow が「理想的な間隔」として返す値）をそのまま**最低**幅として使っていることが
   効いていると見られる。深追いは `layout-pipeline` の範囲なので本Issueでは触っていない。
 
+  **追記（Issue #559・2026-09-03）**: この見立ては正しく、#559 で理想幅に圧縮率を掛けてから
+  最低幅にする修正を入れた。月光は実ブラウザで2小節/段になっている。設計は
+  `.claude/specs/layout-pipeline/design.md` §12、実測と前後の画像は
+  `docs/qa/system-break-min-width/README.md` にある。
+
 ### 未確認の点
 
 再現に使ったのは、リポジトリ内の PD フィクスチャ（`moonlight-bars1-9.score.json`）から

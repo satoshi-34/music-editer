@@ -5,6 +5,8 @@ import type { SavedScoreData } from '../types/storage';
 import { normalizeDuplicateChordKeys } from './chordKeyUtils';
 import { buildExportFileName } from './exportFileName';
 import { validateSavedScoreData } from './storage';
+import { sanitizePickupBeatsInParts } from './measureCapacityUtils';
+import { normalizeTimeSignature } from './timeSignatureUtils';
 import { normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
 import { MAX_VOICES_PER_PART, enforceVoiceLimitInParts, normalizeEmptyVoicesInParts, normalizeMeasuresForPersistence } from './voiceMeasureUtils';
 import { describeVoiceLimitTrimmed, notifyScoreEdit } from './scoreEditorNotices';
@@ -86,10 +88,15 @@ export async function exportScoreToFile(
   // ファイル書き出しが events-only の旧形式 JSON のまま残ってしまう
   const normalized: SavedScoreData = {
     ...data,
-    parts: data.parts.map((part) => ({
-      ...part,
-      measures: normalizeMeasuresForPersistence(part.measures),
-    })),
+    parts: sanitizePickupBeatsInParts(
+      data.parts.map((part) => ({
+        ...part,
+        measures: normalizeMeasuresForPersistence(part.measures),
+      })),
+      // 弱起の不変条件（拍子未満・全パート同値）も書き出しの境界で正す（#473 round4 P1）。
+      // 正さないと、自分で書いたファイルを取り込みの検証で弾いて開けなくなる
+      normalizeTimeSignature(data.timeSignature),
+    ),
   };
   const json = JSON.stringify(normalized, null, 2);
   // ファイル名は共通ユーティリティで組み立てる（Issue #507）。
@@ -167,6 +174,15 @@ export async function importScoreFromFile(file: File): Promise<SavedScoreData> {
       // localStorage 読込と同じ深い検証を通す。
       // メタデータ・調号・拍子・各パートの音符イベントまで型を検証するので、
       // 壊れた/細工されたファイルは描画前にここで弾き、クラッシュ（白画面）を防ぐ。
+      // 弱起の不変条件は検証の前に正す（旧ビルドが書いたファイルでも開けるように・#473 round4 P1）
+      {
+        const raw = data as { parts?: unknown; timeSignature?: unknown };
+        if (raw && Array.isArray(raw.parts) && Array.isArray(raw.timeSignature)) {
+          raw.parts = sanitizePickupBeatsInParts(
+            raw.parts as SavedScoreData['parts'], normalizeTimeSignature(raw.timeSignature as [number, number]),
+          );
+        }
+      }
       if (!validateSavedScoreData(data)) {
         reject(new Error('有効な譜面ファイルではありません（データ形式が不正です）'));
         return;

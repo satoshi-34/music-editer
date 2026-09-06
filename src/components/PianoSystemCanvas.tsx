@@ -2,6 +2,7 @@
 // 1システム分のスタッフを N 段（ピアノ2段、弦楽四重奏4段など）1つのSVGに描画する。
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { resolveBelowSymbolShifts, BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX, type CollisionRect } from '../utils/symbolCollisionUtils';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
@@ -29,7 +30,7 @@ import {
 import { computeArcGeometry, computeArcTaperGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
 import { armClickCycle, planClickCycle, type ClickCycleState } from './clickCycleUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
-import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
+import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY, estimatePedalBottomExtensionPx, PEDAL_TEXT_DESCENT_PX } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
 import {
   SCORE_SELECTION_CLEAR_EVENT,
@@ -49,6 +50,9 @@ import {
   describeLeadingRestFill,
   describeMeasureFull,
   describeNoTupletInMeasure,
+  describePickupCleared,
+  describePickupOverflow,
+  describePickupSet,
   describeOttavaPlaced,
   describeOttavaRemoved,
   describeSymbolToolUnavailable,
@@ -57,6 +61,8 @@ import {
   describeTupletNumbersToggledInMeasure,
   notifyScoreEdit,
   describeDoubleAccidentalKeySignatureUnavailable,
+  describeMicrotoneKeySignatureUnavailable,
+  describeAccidentalTargetNoteLost,
   describeNoteNavigationEdge,
   requestActiveVoiceChange,
   requestNoteSelectionMove,
@@ -167,7 +173,7 @@ import {
   widenThinBarlineRect,
   markThickBarlineRect,
 } from '../utils/engravingDefaults';
-import { MAX_VOICES_PER_PART, buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getEventDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { MAX_VOICES_PER_PART, buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getEventDurationBeats, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildBeatColumns, planLeadingRestFillBeats, type BeatColumn } from '../utils/beatColumnUtils';
 import { sliceBoundaryCandidates, snapToSliceBoundary } from '../utils/beatSliceUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
@@ -189,10 +195,17 @@ import { snapInsertIndexOutOfTupletGroup } from '../utils/tupletGroupIntegrity';
 import { getTupletClipboardGroup, setTupletClipboardGroup } from '../utils/tupletClipboard';
 import {
   formatTimeSignature,
-  getMeasureBeats,
   normalizeTimeSignature,
   normalizeTimeSignatureStyle,
 } from '../utils/timeSignatureUtils';
+import {
+  buildPickupBeatOptions,
+  getDisplayedMeasureNumber,
+  getPickupBeats,
+  normalizePickupBeats,
+  resolveMeasureCapacityBeats,
+  resolveTimeSignatureAtMeasure,
+} from '../utils/measureCapacityUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import {
   allocateCombinedMeasureWidths,
@@ -202,6 +215,7 @@ import {
   measurePlannerSafetyPadding,
   SCORE_LAYOUT_RENDER_SCALE,
   staveSpacingForPartCount,
+  SYSTEM_BREATHING_ROOM_PX,
   SYSTEM_FIRST_CLEF_PADDING,
   SYSTEM_PAGE_SIDE_PADDING,
   SYSTEM_TARGET_FILL,
@@ -218,7 +232,7 @@ import {
 // Issue #38）。既存のテスト（PianoSystemCanvasPartSpacing.test.tsx）はこのファイルからの
 // named import を使っているため、後方互換として re-export する。
 export { computeLayout, staveSpacingForPartCount };
-import { createVexFlowTuplets, syncTupletBracketsWithBeams, syncTupletPlacementWithNotes, vexFlowDotCount, type RenderedTuplet } from '../utils/vexFlowTimingUtils';
+import { createVexFlowTuplets, syncTupletBracketsWithBeams, syncTupletPlacementWithNotes, vexFlowDotCount, type RenderedTuplet, type TupletObstacleRect } from '../utils/vexFlowTimingUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 import {
@@ -459,6 +473,20 @@ function getInputAccidental(tool: Tool): AccidentalToolKind | undefined {
     return undefined;
   }
   return tool.accidental;
+}
+/**
+ * 同じく、音価ツールに乗っている微分音（四分音）を取り出す（Issue #548 の統合で属性になった）。
+ * 通常の臨時記号とは排他なので、両方が同時に入ることはない。
+ */
+function getInputMicrotone(tool: Tool): MicrotoneType | undefined {
+  if (!('duration' in tool) || tool.isRest) {
+    return undefined;
+  }
+  return tool.microtone;
+}
+/** 臨時記号ツール（♯/♭/♮/𝄪/♭♭・¼♯/¼♭ のいずれか）を持っているか */
+function hasAccidentalTool(tool: Tool): boolean {
+  return !!getInputAccidental(tool) || !!getInputMicrotone(tool);
 }
 // 付点1個=1.5倍、複付点(2個)=1.75倍。休符差し込み判定・拍数計算で共通利用する
 const dotBeatsMultiplier = (dots?: 1 | 2) => (dots === 1 ? 1.5 : dots === 2 ? 1.75 : 1);
@@ -1038,6 +1066,10 @@ type BuildPartVoicesInput = {
   normalizedKeySignature: KeySignature;
   /** この小節時点で有効な調号（途中調号変更を解決済みの値） */
   effectiveKeySigForMeasure: KeySignature;
+  /**
+   * この小節の容量（何拍ぶん入るか）。弱起（アウフタクト）の小節では拍子より短い
+   * （Issue #473）。表示用の補完休符をどこまで足すかの基準になる。
+   */
   beatsPerMeasure: number;
   timeSignatureNumerator: number;
   timeSignatureDenominator: number;
@@ -1540,7 +1572,7 @@ type RenderCollectors = {
    * ペダル記号（五線の最下行より下に表示）。stave も持たせておくのは、down→up の
    * 破線ブリッジが段またぎになるかどうかを松葉（ヘアピン）と同じ基準（五線Yの差）で判定するため
    */
-  pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up'; stave: Stave }>;
+  pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up'; stave: Stave; partIndex: number }>;
   /**
    * 歌詞（データ駆動: 歌詞を持つイベントが属する段の五線上端を基準にする）。
    * StaffCanvas と同じ座標計算・見た目を drawLyricsEntry（lyricsRenderUtils.ts）で共有する
@@ -1672,6 +1704,11 @@ function drawRenderedVoiceEntries(
   vexCtx: ReturnType<Renderer['getContext']>,
   stave: Stave,
   renderedVoiceEntries: RenderedVoiceEntry[],
+  // 段またぎ連符の数字が避ける障害物（他パート・他声部の音符の描画範囲）を返す関数。
+  // 段またぎ連符があったときだけ呼ばれる（#574）
+  getTupletObstacles?: () => readonly TupletObstacleRect[],
+  // 段（SVG の箱）の縦の範囲。段またぎ連符の数字をこの外へ出さない（#574 round3）
+  tupletVerticalBounds?: { topY: number; bottomY: number },
 ): void {
     renderedVoiceEntries.forEach((entry) => {
       try{
@@ -1729,7 +1766,11 @@ function drawRenderedVoiceEntries(
       // VexFlow は符幹の向きだけで上下を決めるため、加線の上（下）に離れた音符では
       // 数字だけが五線をまたいで反対側へ取り残され、多段譜では下の段のビームと重なる。
       // 音符と五線の位置関係が要るので、音符が五線へ紐づいたあと（＝描画段）に呼ぶ。
-      syncTupletPlacementWithNotes(entry.tuplets);
+      // 段またぎ連符（#574）は「梁の側」の判定に持ち主のパートの五線が要るので一緒に渡し、
+      // 左手の和音などを避けるための障害物も（またぎがあったときだけ）引けるようにする。
+      syncTupletPlacementWithNotes(entry.tuplets, {
+        ownerStave: stave, getObstacles: getTupletObstacles, verticalBounds: tupletVerticalBounds,
+      });
       entry.tuplets.forEach(({ tuplet, hideNumber }, tupletIndex) => {
         // 数字を隠す指定のグループは描画そのものを行わない（Issue #269）。
         // VexFlow の Tuplet.draw() は数字を必ず描くので「数字だけ消す」ができない。
@@ -2140,7 +2181,7 @@ function drawCollectedSymbolEntries(args: {
         aboveOffset += 10 * s;
       } else if (type === 'accent') {
         // アクセント: 横向きの「>」（先端が右）。以前は下向きの楔（∨）で描いていたが、
-        // 記譜の作法として誤りで、マルカート（∧系）とも紛らわしかった（Issue #474・弟の実使用指摘）
+        // 記譜の作法として誤りで、マルカート（∧系）とも紛らわしかった（Issue #474・ユーザーの実使用指摘）
         const bottomY = noteTopY - 5 - aboveOffset + adjust.offsetY;
         const midY = bottomY - 5.5 * s;
         const topY = bottomY - 11 * s;
@@ -2297,14 +2338,33 @@ function drawCollectedSymbolEntries(args: {
   // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
   // Ped と ✱ が時系列でペアになる区間は、間を破線でつないで「踏み続けている範囲」を示す
   // （実装の詳細・設計判断は StaffCanvas.tsx の同名処理・pedalBridgeUtils.ts を参照）
+  //
+  // 縦位置は「五線下端 + 25」と「区間内の最下音の下端 + 余白」の大きい方（Issue #604）。
+  // 従来は固定オフセットだけで、左手の深い加線の和音（月光の c#2 など）と重なっていた。
+  // 障害物は強弱記号の回避（#340/#382）と同じ noteObstacles（同じパートぶん）を使い、
+  // ペアは区間全体を1つの箱として見るので Ped・✱・破線が同じ高さにそろう。
+  // 段またぎ（前段の Ped と次段の ✱）は、それぞれの段の範囲で別々に求める
   const pedalTextY = (botY: number) => botY + 25;
   const PED_TEXT_HALF_WIDTH = 12;
   const AST_TEXT_HALF_WIDTH = 6;
-  const drawPedalText = (anchorX: number, botY: number, mark: 'down' | 'up') => {
+  const pedalObstaclesFor = (partIndex: number) =>
+    noteObstacles.filter((obstacle) => obstacle.partIndex === partIndex);
+  const pedalBaselineFor = (entry: { botY: number; partIndex: number }, spanX1: number, spanX2: number) => {
+    // 最下段以外（下に別の五線がある）は、下の五線の上端の手前で止める（#382 と同じ境界停止）。
+    // 段の下余白の予約は最下段ぶんしか無いので、ここで止めないと隣の五線へ食い込む（round2 P1）
+    const nextStaveTopY = staveTopYByPart.get(entry.partIndex + 1);
+    const maxBaselineY = nextStaveTopY === undefined
+      ? undefined
+      : nextStaveTopY - BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX - PEDAL_TEXT_DESCENT_PX;
+    return resolvePedalBaselineY({
+      baseY: pedalTextY(entry.botY), spanX1, spanX2, obstacles: pedalObstaclesFor(entry.partIndex), maxBaselineY,
+    });
+  };
+  const drawPedalText = (anchorX: number, baselineY: number, mark: 'down' | 'up') => {
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     el.textContent = mark === 'down' ? 'Ped' : '✱';
     el.setAttribute('x', String(anchorX));
-    el.setAttribute('y', String(pedalTextY(botY)));
+    el.setAttribute('y', String(baselineY));
     el.setAttribute('text-anchor', 'middle');
     el.setAttribute('fill', '#1e293b');
     el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
@@ -2315,39 +2375,48 @@ function drawCollectedSymbolEntries(args: {
   };
   pairPedalMarks(pedalMarkEntries).forEach((result) => {
     if (result.kind === 'down') {
-      drawPedalText(result.down.anchorX, result.down.botY, 'down');
+      const { down } = result;
+      drawPedalText(down.anchorX, pedalBaselineFor(down, down.anchorX - PED_TEXT_HALF_WIDTH, down.anchorX + PED_TEXT_HALF_WIDTH), 'down');
       return;
     }
     if (result.kind === 'up') {
-      drawPedalText(result.up.anchorX, result.up.botY, 'up');
+      const { up } = result;
+      drawPedalText(up.anchorX, pedalBaselineFor(up, up.anchorX - AST_TEXT_HALF_WIDTH, up.anchorX + AST_TEXT_HALF_WIDTH), 'up');
       return;
     }
     const { down, up } = result;
-    drawPedalText(down.anchorX, down.botY, 'down');
-    drawPedalText(up.anchorX, up.botY, 'up');
     const crossSystem = Math.abs(down.stave.getYForLine(2) - up.stave.getYForLine(2)) > 30
       || up.anchorX < down.anchorX;
     if (!crossSystem) {
+      // 区間全体（Ped の左端〜✱ の右端）で1つの高さを決める（仕様2）
+      const baselineY = pedalBaselineFor(down, down.anchorX - PED_TEXT_HALF_WIDTH, up.anchorX + AST_TEXT_HALF_WIDTH);
+      drawPedalText(down.anchorX, baselineY, 'down');
+      drawPedalText(up.anchorX, baselineY, 'up');
       drawPedalBridgeLine({
         svgRoot: svgRoot as unknown as SVGElement,
         x1: down.anchorX + PED_TEXT_HALF_WIDTH,
         x2: up.anchorX - AST_TEXT_HALF_WIDTH,
-        y: pedalTextY(down.botY) - 4,
+        y: baselineY - 4,
       });
     } else {
+      // 段またぎ: 前段は Ped〜段の右端、次段は段の左端〜✱ をそれぞれの範囲で求める（仕様3）
       const edgeX1 = down.stave.getX() + down.stave.getWidth();
       const edgeX2 = up.stave.getX();
+      const downBaselineY = pedalBaselineFor(down, down.anchorX - PED_TEXT_HALF_WIDTH, edgeX1);
+      const upBaselineY = pedalBaselineFor(up, edgeX2, up.anchorX + AST_TEXT_HALF_WIDTH);
+      drawPedalText(down.anchorX, downBaselineY, 'down');
+      drawPedalText(up.anchorX, upBaselineY, 'up');
       drawPedalBridgeLine({
         svgRoot: svgRoot as unknown as SVGElement,
         x1: down.anchorX + PED_TEXT_HALF_WIDTH,
         x2: edgeX1,
-        y: pedalTextY(down.botY) - 4,
+        y: downBaselineY - 4,
       });
       drawPedalBridgeLine({
         svgRoot: svgRoot as unknown as SVGElement,
         x1: edgeX2,
         x2: up.anchorX - AST_TEXT_HALF_WIDTH,
-        y: pedalTextY(up.botY) - 4,
+        y: upBaselineY - 4,
       });
     }
   });
@@ -2465,7 +2534,6 @@ export default function PianoSystemCanvas({
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
   const timeSignatureNumerator = normalizedTimeSignature[0];
   const timeSignatureDenominator = normalizedTimeSignature[1];
-  const beatsPerMeasure = getMeasureBeats(normalizedTimeSignature);
   const normalizedTimeSignatureStyle = normalizeTimeSignatureStyle(timeSignatureStyle);
   const formattedTimeSignature = formatTimeSignature(normalizedTimeSignature, normalizedTimeSignatureStyle);
   const ref = useRef<HTMLDivElement>(null);
@@ -2521,6 +2589,19 @@ export default function PianoSystemCanvas({
   const [partsScore, setPartsScore] = useState<MeasureData[][]>(
     () => parts.map(p => mkInit(p.data))
   );
+
+  /**
+   * その小節に何拍ぶん入るか（小節の容量）。弱起（アウフタクト）の小節は拍子より短いので、
+   * 「段に1つの拍数」ではなく小節ごとに解決する（Issue #473）。
+   * 弱起が無いときは全小節で拍子ぶん＝従来と同じ値を返す。
+   *
+   * 弱起・途中拍子変更の正本はパート0の小節（keySignature と同じ読み取り規約）。
+   * 記号ドラッグ中の下書きコピー（partsScoreForRender）ではなく保存データ側の partsScore を
+   * 見ているのは、下書きが変えるのは記号のオフセットだけで拍数には影響しないため。
+   */
+  const capacityBeatsAt = (absoluteMeasureIndex: number): number =>
+    resolveMeasureCapacityBeats(partsScore[0] ?? parts[0]?.data ?? [], absoluteMeasureIndex, normalizedTimeSignature);
+
   const toggleRepeatMarkerAcrossParts = (measureIndex: number, kind: 'start' | 'end') => {
     // リピート記号はシステム全体でそろって見える方が自然なので、
     // 多段譜ではクリックした1段だけでなく全パートへ同じ印を付ける。
@@ -2541,7 +2622,8 @@ export default function PianoSystemCanvas({
     selectedHairpin: SelectedHairpinSel;
     activeVoiceIndex: number;
     activeLayerPartIndex: number | undefined;
-    beatsPerMeasure: number;
+    /** 小節の容量を解決する関数（弱起対応・Issue #473）。単一の拍数では弱起を表せない */
+    capacityBeatsAt: (absoluteMeasureIndex: number) => number;
     selectedMeasures: { start: number; end: number; startBeat?: number; endBeat?: number } | null;
     disabled: boolean;
     isPrintPreview: boolean;
@@ -2555,7 +2637,7 @@ export default function PianoSystemCanvas({
     selectedHairpin: null,
     activeVoiceIndex,
     activeLayerPartIndex,
-    beatsPerMeasure,
+    capacityBeatsAt,
     selectedMeasures: selectedMeasures ?? null,
     disabled,
     isPrintPreview,
@@ -2640,6 +2722,13 @@ export default function PianoSystemCanvas({
   // 従来の個別 setState と同一なので挙動はゼロ差。
   type OverlayStates = {
     timeSig: {
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    /** 弱起（アウフタクト＝不完全小節）の設定オーバーレイ（Issue #473） */
+    pickup: {
     measureAbsoluteIndex: number;
     currentValue: string;
     overlayX: number;
@@ -2819,7 +2908,7 @@ export default function PianoSystemCanvas({
         dispatchEditorLocal({ type: 'OVERLAY_SET', kind, value });
     return {
       note: selectionSetter('note'), arc: selectionSetter('arc'), hairpin: selectionSetter('hairpin'),
-      timeSig: overlaySetter('timeSig'), keySig: overlaySetter('keySig'), clef: overlaySetter('clef'),
+      timeSig: overlaySetter('timeSig'), pickup: overlaySetter('pickup'), keySig: overlaySetter('keySig'), clef: overlaySetter('clef'),
       bpm: overlaySetter('bpm'), rehearsal: overlaySetter('rehearsal'), text: overlaySetter('text'),
       freeText: overlaySetter('freeText'),
       symbolResize: overlaySetter('symbolResize'), symbolOffset: overlaySetter('symbolOffset'),
@@ -2835,6 +2924,8 @@ export default function PianoSystemCanvas({
   const setSelectedHairpin = editorLocalSetters.hairpin;
   const timeSigEditState = editorLocal.overlay?.kind === 'timeSig' ? editorLocal.overlay.payload : null;
   const setTimeSigEditState = editorLocalSetters.timeSig;
+  const pickupEditState = editorLocal.overlay?.kind === 'pickup' ? editorLocal.overlay.payload : null;
+  const setPickupEditState = editorLocalSetters.pickup;
   const keySigEditState = editorLocal.overlay?.kind === 'keySig' ? editorLocal.overlay.payload : null;
   const setKeySigEditState = editorLocalSetters.keySig;
   const clefEditState = editorLocal.overlay?.kind === 'clef' ? editorLocal.overlay.payload : null;
@@ -3728,7 +3819,7 @@ export default function PianoSystemCanvas({
       selectedHairpin,
       activeVoiceIndex,
       activeLayerPartIndex,
-      beatsPerMeasure,
+      capacityBeatsAt,
       selectedMeasures: selectedMeasures ?? null,
       disabled,
       isPrintPreview,
@@ -4269,7 +4360,7 @@ export default function PianoSystemCanvas({
         }
         // 貼り付け先の声部は「いま編集中の声部」（コピー元の声部は問わない）。
         const targetVoiceIndex=latestRef.current.activeVoiceIndex;
-        const beatsLimit=latestRef.current.beatsPerMeasure;
+        const beatsLimit=latestRef.current.capacityBeatsAt(measure);
         // 空き拍の判定は setPartsScore の updater の**外**で行う（Issue #331）。
         // updater の中で通知すると、React が updater を2回呼ぶ場面（StrictMode など）で
         // 同じ通知が二重に出てしまうため（.claude/specs/dead-end-speaks/design.md の約束）。
@@ -4438,7 +4529,12 @@ export default function PianoSystemCanvas({
     ref.current.innerHTML='';
     ref.current.style.overflow='visible';
 
-    const { staveYs, sysH, staveSpacing } = computeLayout(parts.length, partSpacingOffsetPx);
+    // ペダル記号が最下音を避けて下がるぶんの段の下余白（#604）。ScorePage 側のページ段数の
+    // 見積もり（measuredSystemHeightPx）も同じ純関数で同じ値を足すので、段の実高さと一致する
+    const pedalBottomExtensionPx = estimatePedalBottomExtensionPx(
+      parts.map((part, pi) => ({ measures: partsScoreForRender[pi] ?? part.data, clef: part.clef })),
+    );
+    const { staveYs, sysH, staveSpacing } = computeLayout(parts.length, partSpacingOffsetPx, pedalBottomExtensionPx);
     const W=ref.current.parentElement?.clientWidth??ref.current.clientWidth??700;
     const renderer=new Renderer(ref.current,Renderer.Backends.SVG);
     // sysH は FIRST_STAVE_Y / STAVE_SPACING という「論理座標（ctx.scale適用前）」で
@@ -5290,12 +5386,22 @@ export default function PianoSystemCanvas({
         }
         // 小節番号: 段の先頭小節（i===0）・最上段（pi===0）にだけ、絶対小節番号を表示する。
         // 曲頭（絶対インデックス0）は慣習として番号を出さない。
+        // 弱起（アウフタクト）があるときは、慣習どおり弱起を0と数えるため番号が1つずつ
+        // 繰り下がる（弱起の次の小節が「1」）。getDisplayMeasureNumber が正本（Issue #473）。
         if (pi === 0 && i === 0 && startMeasureIndex !== 0) {
-          measureNumberEntries.push({
-            x: x / s,
-            topY: stave.getYForLine(0),
-            number: startMeasureIndex + 1,
-          });
+          // 弱起は 0（＝番号を出さない小節）として返る
+          const displayNumber = getDisplayedMeasureNumber(
+            partsScoreForRender[0] ?? parts[0]?.data ?? [],
+            startMeasureIndex,
+            normalizedTimeSignature
+          );
+          if (displayNumber !== 0) {
+            measureNumberEntries.push({
+              x: x / s,
+              topY: stave.getYForLine(0),
+              number: displayNumber,
+            });
+          }
         }
       });
 
@@ -5854,7 +5960,7 @@ export default function PianoSystemCanvas({
           pi, systemColumnIndex: i, absI, staveSets, parts,
           partsScoreForRender, normalizedKeySignature,
           effectiveKeySigForMeasure: effectiveKeySigPerMeasure[i],
-          beatsPerMeasure, timeSignatureNumerator, timeSignatureDenominator,
+          beatsPerMeasure: capacityBeatsAt(absI), timeSignatureNumerator, timeSignatureDenominator,
           selected, activeVoiceIndex,
           highlightedLayerPartIndex: activeLayerHighlightPartIndex,
           prevMeasureState: prevMeasureStatePerPart[pi],
@@ -5873,6 +5979,55 @@ export default function PianoSystemCanvas({
 
       // Pass 2: 合同フォーマット。実体は formatSystemColumnVoices（module スコープ・#244 段4c-1）
       formatSystemColumnVoices(allVoicesForFormatting, restAlignVoices, staveSets[0][i]);
+
+      // 段またぎ連符の数字が避ける障害物（#574）: この段のすべてのパート・声部の音符の
+      // 描画範囲。Pass 2 の合同フォーマットが済んだ後なので、まだ描いていないパート
+      // （左手）の音符でも位置は確定している ＝ 右手を描く時点で左手の和音を避けられる。
+      // 段またぎ連符がある小節でしか要らないので、最初に必要になった時点で1回だけ作る。
+      let cachedSystemNoteRects: TupletObstacleRect[] | null = null;
+      const getSystemNoteRects = (): readonly TupletObstacleRect[] => {
+        if (cachedSystemNoteRects) return cachedSystemNoteRects;
+        // 先に「この段の全パートのビーム」を post-format しておく（#574 round2 P1）。
+        // 連桁の音符は、ビームの傾きに合わせて符幹が伸ばされる（VexFlow の
+        // Beam.postFormat → applyStemExtensions）。これは既定では Beam.draw() の中で
+        // 初めて走るため、右手を描く時点ではまだ描いていない左手の符幹が「伸ばされる前の
+        // 短い長さ」のままになり、あとで伸びて数字とぶつかることがあった。
+        // postFormat は2回目以降は何もしない（postFormatted フラグ）ので、
+        // このあと Beam.draw() が呼ばれても結果は変わらない。
+        partVoiceCache.forEach((cache) => {
+          cache?.renderedVoiceEntries.forEach((entry) => {
+            // 段またぎ声部は、合同整形で消えたビームの参照と符幹の向きを先に戻す（#319）。
+            // 向きが戻る前に post-format すると、間違った向きのまま符幹長が確定してしまう
+            // （描画時の復元は同じ内容なので、ここで先に呼んでも二重には効かない）
+            if (entry.hasCrossStaffNote) {
+              restoreCrossStaffBeamAssignments(entry.beams);
+            }
+            entry.beams.forEach((beam) => {
+              try {
+                (beam as unknown as { postFormat?: () => void }).postFormat?.();
+              } catch {
+                // 整形が済んでいないビームでは失敗し得る。そのビームを諦めるだけでよい
+              }
+            });
+          });
+        });
+        const rects: TupletObstacleRect[] = [];
+        partVoiceCache.forEach((cache) => {
+          cache?.renderedVoiceEntries.forEach((entry) => {
+            entry.vfNotes.forEach((note) => {
+              try {
+                const bb = (note as unknown as { getBoundingBox?: () => { getX: () => number; getY: () => number; getW: () => number; getH: () => number } }).getBoundingBox?.();
+                if (!bb) return;
+                rects.push({ x: bb.getX(), y: bb.getY(), w: bb.getW(), h: bb.getH() });
+              } catch {
+                // 整形が済んでいない音符では範囲を取れないことがある。その音符を諦めるだけでよい
+              }
+            });
+          });
+        });
+        cachedSystemNoteRects = rects;
+        return rects;
+      };
 
       // Pass 3: フォーマット済みの Voice を使って実際の描画・イベントハンドラ設定を行う。
       // 空白クリック挿入のパートごとの実体。レイヤー明示選択中は「クリックした帯」では
@@ -5954,7 +6109,16 @@ export default function PianoSystemCanvas({
         }
 
         // 声部・ビーム・連符の描画（実体は drawRenderedVoiceEntries・#244 段4c-2）
-        drawRenderedVoiceEntries(ctx, stave, renderedVoiceEntries);
+        // 段またぎ連符の数字の縦の許容範囲（#574 round3）。段の箱（sysH・論理座標）は Ped の
+        // 下余白の延長（#604）を除けば最下段の第5線で終わっていて下余白を持たないので、五線下の記号（Ped・pp・連符数字）は段の箱の
+        // 外に描かれる。下側の**公称の予算**として SYSTEM_BREATHING_ROOM_PX（70・本来は段数の
+        // 推奨値の見積もりに使う物理 px の目安）を論理座標のまま足す＝物理では 70×描画倍率
+        // （100% で約 31px）。実際の段間は段のスロット高と段の間隔（ユーザー設定）で決まるので
+        // これは上限の目安にすぎず、実測に基づく予約は #668 で扱う。
+        // 予算を越えるなら反対側（上）へ逃がす。上は段の箱の上端（第1線の上 6 間ぶん）まで
+        drawRenderedVoiceEntries(ctx, stave, renderedVoiceEntries, getSystemNoteRects, {
+          topY: 0, bottomY: sysH + SYSTEM_BREATHING_ROOM_PX,
+        });
 
         // 自動衝突回避（#340 段1）の障害物: 描画した全声部の音符の BoundingBox
         // （符頭＋符幹を含む）を段ごとに集める。編集レイヤーやアクティブ声部の
@@ -6283,7 +6447,7 @@ export default function PianoSystemCanvas({
               clickX:lx,
               currentBeats,
               addBeats,
-              beatsPerMeasure,
+              beatsPerMeasure: capacityBeatsAt(absI),
             });
             if(fillBeats<=0)return {rests:[],startBeat:currentBeats};
             // 埋める休符の高さは、画面に見えている補完休符（computeVoiceDisplayPadding）と
@@ -6317,14 +6481,19 @@ export default function PianoSystemCanvas({
           // 空き拍の判定に使う currentBeats はアクティブ声部の events から求めているので、
           // 声部2の占有拍だけを見て「入るかどうか」を決められる。
           if((tool as any)?.tuplet){
-            const { groupEvents, groupBeats } = buildTupletGroupPlan(
+            const { groupEvents: groupEventsBase, groupBeats } = buildTupletGroupPlan(
               addDuration,
               addDots,
               [key],
               defaultRestKeyForClef(clefHere),
               (tool as any).tuplet
             );
-            if(currentBeats + groupBeats > beatsPerMeasure + 0.000001){
+            // 連符グループの先頭の音符にも微分音を乗せる（通常の臨時記号は key の綴りで既に乗っている）
+            const tupletMicrotone = getInputMicrotone(tool);
+            const groupEvents = tupletMicrotone
+              ? groupEventsBase.map((event) => event.isRest ? event : applyMicrotoneToEvent(event, tupletMicrotone, 0))
+              : groupEventsBase;
+            if(currentBeats + groupBeats > capacityBeatsAt(absI) + 0.000001){
               // 黙って諦めると「クリック位置が悪いのか、アプリが壊れたのか」が分からない。
               // 拒否は正しい挙動なので、理由と次の一手だけを伝える（Issue #318「行き止まりは喋る」）
               notifyScoreEdit(describeMeasureFull());
@@ -6335,7 +6504,7 @@ export default function PianoSystemCanvas({
             setScore(prev=>{
               const next=prev.map(cloneMeasureData);
               while(absI>=next.length)next.push(createEmptyMeasure());
-              fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
+              fillPriorMeasureRests(next, absI, capacityBeatsAt, clefHere);
               // 通常音符の挿入と同じ経路（withVoiceEventsUpdated）へそろえる。
               // 直接 m.events を触ると、声部2がアクティブでも声部1へ書き込んでしまう。
               next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
@@ -6352,13 +6521,13 @@ export default function PianoSystemCanvas({
           }
 
           const addBeats = beatsFromVF(toVFDur(addDuration)) * dotBeatsMultiplier(addDots);
-          if(currentBeats + addBeats > beatsPerMeasure){
+          if(currentBeats + addBeats > capacityBeatsAt(absI)){
             // 連符グループと同じく、入らない理由と代替手順を伝える（Issue #318）
             notifyScoreEdit(describeMeasureFull());
             return;
           }
 
-          const insertedEvent:NoteEvent={
+          const insertedEventBase:NoteEvent={
             dur:addDuration,
             isRest:!!(tool as any)?.isRest,
             keys:[(tool as any)?.isRest
@@ -6366,12 +6535,19 @@ export default function PianoSystemCanvas({
               : key],
             dots: addDots,
           };
+          // 微分音（¼♯・¼♭）は音高の綴りではなく microtones[] に持つデータなので、
+          // 通常の臨時記号（key の綴りに寄せる applyInputAccidentalToKey）とは別に
+          // 置いた直後のイベントへ適用する（Issue #548 の統合で入力にも開放した）
+          const insertMicrotone = getInputMicrotone(tool);
+          const insertedEvent:NoteEvent = insertMicrotone && !insertedEventBase.isRest
+            ? applyMicrotoneToEvent(insertedEventBase, insertMicrotone, 0)
+            : insertedEventBase;
 
           const leading=buildLeadingRests(addBeats, voiceCountAfterInsert);
           setScore(prev=>{
             const next=prev.map(cloneMeasureData);
             while(absI>=next.length)next.push(createEmptyMeasure());
-            fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
+            fillPriorMeasureRests(next, absI, capacityBeatsAt, clefHere);
             next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
               const copy=[...events];
               copy.splice(Math.max(0,Math.min(at,copy.length)),0,...leading.rests,insertedEvent);
@@ -6395,7 +6571,7 @@ export default function PianoSystemCanvas({
          * 旧・案B（帯域のパートへ入れて自動切替）は、月光 m5 の低い右手三連符のような
          * 「片手が帯域を外れる」常態的な音型で明示選択が壊れたため差し替えた
          * （①実例 ②交差・月光型はピアノ曲で常態 ③Finale も選択レイヤー絶対方式で
-         * 弟のメンタルモデルもこれ。テスト会で引っかかりの逆流が無いか検証する。
+         * ユーザーのメンタルモデルもこれ。テスト会で引っかかりの逆流が無いか検証する。
          * 経緯は .claude/specs/editor-layer-selection/design.md の追補を参照）
          */
         const notifyCrossBandInsert = (sourceBandPi: number) => {
@@ -6408,8 +6584,9 @@ export default function PianoSystemCanvas({
         const sliceSelection = selectedMeasures != null && absI >= selectedMeasures.start && absI <= selectedMeasures.end
           ? (() => {
               const fromBeat = absI === selectedMeasures.start ? (selectedMeasures.startBeat ?? 0) : 0;
-              const toBeat = absI === selectedMeasures.end ? (selectedMeasures.endBeat ?? beatsPerMeasure) : beatsPerMeasure;
-              const partial = fromBeat > 0.0001 || toBeat < beatsPerMeasure - 0.0001;
+              const measureBeatsHere = capacityBeatsAt(absI);
+              const toBeat = absI === selectedMeasures.end ? (selectedMeasures.endBeat ?? measureBeatsHere) : measureBeatsHere;
+              const partial = fromBeat > 0.0001 || toBeat < measureBeatsHere - 0.0001;
               return { partial, fromBeat, toBeat };
             })()
           : null;
@@ -6436,7 +6613,7 @@ export default function PianoSystemCanvas({
           if (columns.length === 0 || !hasRealEvents) {
             // 空小節: 小節幅の線形補間で読む
             const ratio = Math.max(0, Math.min(1, (lx - measLeft) / Math.max(1, measRight - measLeft)));
-            return ratio * beatsPerMeasure;
+            return ratio * capacityBeatsAt(absI);
           }
           let best = columns[0];
           for (const col of columns) {
@@ -6444,7 +6621,7 @@ export default function PianoSystemCanvas({
           }
           // 最終列より右は小節末とみなす（末尾の音符の後ろをなぞったとき）
           const last = columns.reduce((a, b) => (a.x > b.x ? a : b));
-          if (lx > last.x + (last.x - measLeft) * 0.0 + 12) return beatsPerMeasure;
+          if (lx > last.x + (last.x - measLeft) * 0.0 + 12) return capacityBeatsAt(absI);
           return best.beats;
         };
         const sliceCandidatesHere = (): number[] => {
@@ -6456,9 +6633,9 @@ export default function PianoSystemCanvas({
           if (activeLayerPartIndex != null) {
             const layerMeasure = (partsScoreForRender[activeLayerPartIndex] ?? [])[absI];
             const layerEvents = getMeasureVoices(layerMeasure)[activeVoiceIndex]?.events ?? [];
-            return sliceBoundaryCandidates([{ events: layerEvents }], beatsPerMeasure);
+            return sliceBoundaryCandidates([{ events: layerEvents }], capacityBeatsAt(absI));
           }
-          return sliceBoundaryCandidates(parts.map((_, otherPi) => (partsScoreForRender[otherPi] ?? [])[absI]), beatsPerMeasure);
+          return sliceBoundaryCandidates(parts.map((_, otherPi) => (partsScoreForRender[otherPi] ?? [])[absI]), capacityBeatsAt(absI));
         };
         const snappedBeatAtX = (lx: number): number =>
           snapToSliceBoundary(beatAtX(lx), sliceCandidatesHere());
@@ -6577,6 +6754,21 @@ export default function PianoSystemCanvas({
               });
               return 'handled';
             }
+            case 'measurePickup': {
+              // 弱起（不完全小節）はパート間で食い違わせない約束なので、拍子と同じく
+              // 正本のパート0から現在値を読む（書き込みは全パートへ・Issue #473）
+              const currentPickup = getPickupBeats(
+                partsScoreForRender[0] ?? parts[0]?.data ?? [],
+                absI,
+                normalizedTimeSignature
+              );
+              setPickupEditState({
+                measureAbsoluteIndex: absI,
+                currentValue: currentPickup != null ? String(currentPickup) : '',
+                ...overlayAt(),
+              });
+              return 'handled';
+            }
             case 'measureKeySig': {
               // 調号は最上段（partsScore[0]）の小節データに保存する（読み取りは描画用コピー）
               const currentKS = partsScoreForRender[0]?.[absI]?.keySignature;
@@ -6673,11 +6865,11 @@ export default function PianoSystemCanvas({
         // 強調表示もそのパートの五線にだけ出す。他の段まで塗ると「全パートに効く」ように見える
         if (sliceSelection?.partial && (activeLayerPartIndex == null || pi === activeLayerPartIndex)) {
           const xForBeat = (b: number): number => {
-            if (b >= beatsPerMeasure - 0.0001) return measRight;
+            if (b >= capacityBeatsAt(absI) - 0.0001) return measRight;
             if (b <= 0.0001) return measLeft;
             const columns = beatColumnsByMeasureP.get(absI) ?? [];
             const hit = columns.find((c) => Math.abs(c.beats - b) < 0.0001);
-            return hit ? hit.x : measLeft + (b / beatsPerMeasure) * (measRight - measLeft);
+            return hit ? hit.x : measLeft + (b / capacityBeatsAt(absI)) * (measRight - measLeft);
           };
           const x1 = xForBeat(sliceSelection.fromBeat);
           const x2 = xForBeat(sliceSelection.toBeat);
@@ -6767,16 +6959,26 @@ export default function PianoSystemCanvas({
             return;
           }
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-          if('mode' in tool&&tool.mode==='accidental'){
+          // 臨時記号ツール中の背景クリック（Issue #548 の統合で「音符を置く」に変わった）。
+          // 調号領域だけは先に判定しないと、先頭段の調号の上に音符が生えて
+          // 調号変更の経路が音符入力に食われる（設計メモ §3-3・受入ケース11）。
+          if(hasAccidentalTool(tool)){
             if(i===0&&lx>=firstStaveKeySignatureHitBounds.left&&lx<=firstStaveKeySignatureHitBounds.right){
+              const keySignatureAccidental = getInputAccidental(tool);
+              if(!keySignatureAccidental){
+                // 微分音（¼♯・¼♭）は調号には存在しない。ここで挿入へ流すと調号の上に
+                // 音符が生えるので、理由だけ伝えて消費する（#318「行き止まりは喋る」）
+                notifyScoreEdit(describeMicrotoneKeySignatureUnavailable());
+                return;
+              }
               // 臨時記号ツール中の背景クリックは、調号領域なら調号変更へ回す。
               // クリックされた段に固有の調号があれば、それを基準にシフトする。
               // こうすると記譜音モードのときに「画面で見えている調号」に対する
               // 操作になり、ユーザーの期待通りに動く。
               const baseKey = partKeyForAccidental;
-              const nextKey = shiftKeySignatureByAccidental(baseKey, tool.accidental);
+              const nextKey = shiftKeySignatureByAccidental(baseKey, keySignatureAccidental);
               console.info('[PianoSystemCanvas] 調号領域クリック', {
-                tool: tool.accidental,
+                tool: keySignatureAccidental,
                 partIndex: pi,
                 current: baseKey,
                 next: nextKey,
@@ -6786,14 +6988,17 @@ export default function PianoSystemCanvas({
               // 調号が変わらないときは書き換え・履歴を積まない（Issue #423。理由は上の同じ判定を参照）
               if (nextKey !== baseKey) {
                 onKeySignatureChange?.(nextKey, pi);
-              } else if (tool.accidental === 'doubleSharp' || tool.accidental === 'doubleFlat') {
+              } else if (keySignatureAccidental === 'doubleSharp' || keySignatureAccidental === 'doubleFlat') {
                 // 𝄪・𝄫 は調号に存在しないため必ずここへ来る。無言だと「効かない」ようにしか
                 // 見えないので、次の一手を案内する（#318・#430 round1 P2）
-                notifyScoreEdit(describeDoubleAccidentalKeySignatureUnavailable(tool.accidental === 'doubleSharp' ? '##' : 'bb'));
+                notifyScoreEdit(describeDoubleAccidentalKeySignatureUnavailable(keySignatureAccidental === 'doubleSharp' ? '##' : 'bb'));
               }
+              // 調号領域のクリックは調号変更で終わり。ここで抜けないと、
+              // 同じクリックで音符まで生えてしまう（受入ケース11）
+              return;
             }
-            // 調号領域以外の背景クリックでは、音符を新規挿入しない。
-            return;
+            // 調号領域の外は、統合後は「その記号付きの音符を置く」ので下の挿入へ流す
+            // （統合前は無反応だった。設計メモ §3-5 の変更点D）
           }
           // 小節背景クリックは常にアクティブ声部への挿入。
           // 声部2の既存音符の真上をクリックした場合も、doInsert 内の位置判定で
@@ -6807,7 +7012,7 @@ export default function PianoSystemCanvas({
           (doInsertByPart[insertTargetPi] ?? doInsert)(lx, ly, pi);
         });
         svgRoot.appendChild(ir);
-        if ('mode' in tool && tool.mode === 'accidental' && i === 0) {
+        if (getInputAccidental(tool) && i === 0) {
           const keySignatureDebugRect = document.createElementNS('http://www.w3.org/2000/svg','rect');
           keySignatureDebugRect.setAttribute('class','vf-key-signature-debug');
           keySignatureDebugRect.setAttribute('x',String(firstStaveKeySignatureHitBounds.left));
@@ -7266,8 +7471,113 @@ export default function PianoSystemCanvas({
                * 続けることを意味し、旧実装で「フラグ分岐のガードに合致せず if 連鎖を
                * 素通りしていた」経路と1対1に対応する。
                */
+              /**
+               * 臨時記号ツール（Issue #548 の統合後）で符頭を押したときの「付与」（設計メモ §3-2 の表 #2）。
+               *
+               * 付与になるか・音符が生えるかは resolveSelectableKeyIndexAt の戻り値1本で決める。
+               * 同じ関数をホバーのカーソル形状と再クリック巡回（#264）も呼んでいるので、
+               * 「ホバーでは選択に見えるのに押すと別のことが起きる」食い違いが構造的に起きない
+               * （設計メモ §3-4。判定の2枚目を作らないこと自体が目的）。
+               *
+               * 戻り値 null は「付与ではない」＝既定処理（挿入・和音追加・休符置換）へ流す合図。
+               */
+              const accidentalApplyOutcome = (): NoteClickOutcome | null => {
+                const applyAccidental = getInputAccidental(tool);
+                const applyMicrotone = getInputMicrotone(tool);
+                if (!applyAccidental && !applyMicrotone) return null;
+                const isKeySignatureZone = i===0 &&
+                  lx>=firstStaveKeySignatureHitBounds.left && lx<=firstStaveKeySignatureHitBounds.right;
+                if (clickedIsRest) {
+                  // 空小節の全休符プレースホルダーが背景クリックを拾ってしまう譜面でも、
+                  // 調号領域だけは調号変更へ流す（統合前と同じ・#423／受入ケース11）。
+                  if (isKeySignatureZone) {
+                    if (!applyAccidental) {
+                      notifyScoreEdit(describeMicrotoneKeySignatureUnavailable());
+                      return { kind: 'handled' };
+                    }
+                    const baseKey = partKeyForAccidental;
+                    const nextKey = shiftKeySignatureByAccidental(baseKey, applyAccidental);
+                    if (nextKey !== baseKey) {
+                      onKeySignatureChange?.(nextKey, hitPi);
+                    } else if (applyAccidental === 'doubleSharp' || applyAccidental === 'doubleFlat') {
+                      notifyScoreEdit(describeDoubleAccidentalKeySignatureUnavailable(
+                        applyAccidental === 'doubleSharp' ? '##' : 'bb'));
+                    }
+                    return { kind: 'handled' };
+                  }
+                  // 休符は「その記号付きの音符へ置換」（#233 の1クリック置換に記号が乗る・受入ケース12）
+                  return null;
+                }
+                if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return null;
+                const clickedKeyIndex = resolveSelectableKeyIndexAt(lx, ly);
+                // 符頭から外れたクリックは挿入・和音追加へ（受入ケース2・13）
+                if (clickedKeyIndex < 0) return null;
+                const snappedLine = snapLineForKeySelect(ly);
+                const applyToEvent = <T extends { isRest: boolean; keys: string[]; microtones?: { keyIndex: number; type: MicrotoneType }[] }>(
+                  targetEv: T, keyIndex: number
+                ): T => applyAccidental
+                  ? applyAccidentalToEvent(targetEv, applyAccidental, keyIndex>=0?keyIndex:undefined)
+                  : applyMicrotoneToEvent(targetEv, applyMicrotone!, keyIndex>=0?keyIndex:undefined);
+                // 「どの音へ付けるか」は最新データ（partsScoreRef。毎レンダーで同期している
+                // 保存データのミラー）で引き直す。当たり判定は VexFlow が描いた時点の図形から
+                // 作られるので、描画が1手遅れている間はクリック時の keyIndex が古い和音を
+                // 指していることがあるため。
+                //
+                // 判定を setScore の updater の外でやるのは #318 の決まりごと（updater の中で
+                // 通知すると React が updater を2回呼ぶ場面で通知が二重に出る）に従うためで、
+                // ここで失敗を確定させておけば「対象が消えていた」を通知付きで断れる。
+                const latestEv = getVoiceEvents(
+                  partsScoreRef.current[hitPi]?.[absI] ?? { events: [] }, hitVoice
+                )[j];
+                // 行番号→鍵の引き直しは、当たり判定と同じ noteK2l を使う。段またぎの音符は
+                // 隣の五線（別クレフ）に描かれているので、元パートの k2l で引くと別の行を指し、
+                // 解決に失敗する（#548 round1 P2-1）。
+                const resolvedKeyIndex = latestEv && !latestEv.isRest
+                  ? findKeyIndexAtLine(latestEv.keys, snappedLine, noteK2l)
+                  : -1;
+                if (resolvedKeyIndex < 0 || resolvedKeyIndex >= (latestEv?.keys.length ?? 0)) {
+                  // 引き直しに失敗した＝押した音がもう無い。ここで古い clickedKeyIndex へ
+                  // 落とすと「押していない音に記号が付く」ので、付けずに断る（#548 round2 P2-2）。
+                  // 選択の移動も確認音も行わない（「音は鳴ったが譜面は変わらない」を作らない）。
+                  return { kind: 'rejected', notice: describeAccidentalTargetNoteLost() };
+                }
+                // 上の引き直しは「描画のミラー」を見ているだけで、書き込みは React の state に
+                // 対して行われる。同じ tick に別の更新（選択中の音の Delete など）が積まれて
+                // いると、ミラーでは在った音が書き込み時点では消えていることがある
+                // （#548 round3 P2）。そこで書き込みを flushSync で**この場で確定**させ、
+                // 「実際に書けたか」を見てから選択・確認音・通知を決める。updater の中では
+                // 通知しない（#318: updater が2回呼ばれる場面で二重に出る）ので、
+                // 書けたかどうかの印だけを外へ持ち出す。
+                let written = false;
+                let writtenEv: typeof latestEv | null = null;
+                flushSync(() => {
+                  updateHitEvent(j, (targetEv) => {
+                    if(targetEv.isRest)return null;
+                    if (resolvedKeyIndex >= targetEv.keys.length) return null;
+                    const applied = applyToEvent(targetEv, resolvedKeyIndex);
+                    written = true;
+                    writtenEv = applied;
+                    return applied;
+                  });
+                });
+                if (!written || !writtenEv) {
+                  // 書けなかった＝押した音は書き込みの瞬間にもう無かった。選択も確認音も
+                  // 行わずに断る（「音は鳴ったが譜面は変わらない」を作らない）。
+                  return { kind: 'rejected', notice: describeAccidentalTargetNoteLost() };
+                }
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:resolvedKeyIndex});
+                if (previewAccidentalOnApply) {
+                  playNoteEvent(writtenEv, part.playbackInstrument);
+                }
+                return { kind: 'handled' };
+              };
+
               const flagToolOutcome = (): NoteClickOutcome => {
-              if (!('mode' in tool)) return { kind: 'passThrough' };
+              if (!('mode' in tool)) {
+                // 統合後の臨時記号は mode を持たない「音価ツールの属性」なので、
+                // フラグ系のテーブルへ入る前にここで付与かどうかを判定する（#548）
+                return accidentalApplyOutcome() ?? { kind: 'passThrough' };
+              }
               switch (tool.mode) {
               case 'tupletNumberToggle': {
                 // 連符ではない音符を押しても何も起きないため、理由と代替手順を伝える
@@ -7333,99 +7643,6 @@ export default function PianoSystemCanvas({
                 // 成功の報告なので rejected ではなく handled 内の通知（rejected は失敗の終端専用）。
                 notifyScoreEdit(describeCrossStaffToggled(direction, turnedOn, hitVoice));
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
-                return { kind: 'handled' };
-              }
-              case 'accidental': {
-                const accidentalMode = tool.accidental;
-                if (clickedIsRest) {
-                  // 休符×臨時記号（旧実装では休符分岐の中にあったセルをここへ移設）:
-                  // 先頭段の調号領域だけは調号変更へ流し、それ以外は消費して終える。
-                  const isKeySignatureZone = i===0 &&
-                    lx>=firstStaveKeySignatureHitBounds.left && lx<=firstStaveKeySignatureHitBounds.right;
-                  if (isKeySignatureZone) {
-                    // 多段譜でも空小節は全休符プレースホルダーが背景クリックを拾うため、
-                    // 調号領域だけはここから調号変更へ流す。
-                    // パート固有調号があればそれを基準にシフトし、partIndex を添えて返す。
-                    const baseKey = partKeyForAccidental;
-                    const nextKey = shiftKeySignatureByAccidental(baseKey, accidentalMode);
-                    console.info('[PianoSystemCanvas] 調号領域クリック', {
-                      tool: accidentalMode,
-                      partIndex: hitPi,
-                      current: baseKey,
-                      next: nextKey,
-                      x: lx,
-                      bounds: firstStaveKeySignatureHitBounds,
-                    });
-                    // 調号が変わらないときは書き換え・履歴を積まない（Issue #423）。
-                    // 𝄪・𝄫 は調号には存在しないため必ず同じ調号が返る。
-                    if (nextKey !== baseKey) {
-                      onKeySignatureChange?.(nextKey, hitPi);
-                    } else if (tool.accidental === 'doubleSharp' || tool.accidental === 'doubleFlat') {
-                      // 無言の行き止まりにしない（#318・#430 round1 P2）
-                      notifyScoreEdit(describeDoubleAccidentalKeySignatureUnavailable(tool.accidental === 'doubleSharp' ? '##' : 'bb'));
-                    }
-                  }
-                  // 調号領域の外は従来から無反応でクリックを消費する（挙動ゼロ差のため
-                  // 通知は足さない。喋るべきかは #318 系の別Issueで扱う）
-                  return { kind: 'handled' };
-                }
-                // 多段譜でも単旋律譜と同じ感覚で使えるよう、
-                // 臨時記号は音符セル内クリックなら適用できるようにする。
-                // 符頭の狭い当たり判定だけにすると「置けない」と感じやすいため、
-                // 和音追加より先にこちらを処理する。
-                // ここでの snappedLine は「どの符頭に付けるか」を決めるためだけに使うので、
-                // 五線から遠い音符にも効くよう選択用の丸め（Issue #218）を使う。
-                const snappedLine = snapLineForKeySelect(ly);
-                const clickedKeyIndex = findKeyIndexAtLine(activeEvs[j].keys, snappedLine, k2l);
-                const nextEv = applyAccidentalToEvent(
-                  activeEvs[j],
-                  accidentalMode,
-                  clickedKeyIndex>=0?clickedKeyIndex:undefined
-                );
-                updateHitEvent(j, (targetEv) => {
-                  if(targetEv.isRest)return null;
-                  const latestKeyIndex = clickedKeyIndex>=0
-                    ? findKeyIndexAtLine(targetEv.keys, snappedLine, k2l)
-                    : -1;
-                  return applyAccidentalToEvent(
-                    targetEv,
-                    accidentalMode,
-                    latestKeyIndex>=0?latestKeyIndex:undefined
-                  );
-                });
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:clickedKeyIndex>=0?clickedKeyIndex:undefined});
-                if (previewAccidentalOnApply) {
-                  playNoteEvent(nextEv, part.playbackInstrument);
-                }
-                return { kind: 'handled' };
-              }
-              case 'microtone': {
-                // 微分音×休符は旧実装どおり既定処理へ（休符置換もされず選択/挿入になる）
-                if (clickedIsRest) return { kind: 'passThrough' };
-                const microtoneMode = tool.type;
-                // 微分音（四分音）も、通常の臨時記号と同じ「音符セルクリックで適用」操作にする。
-                const snappedLine = snapLineForKeySelect(ly);
-                const clickedKeyIndex = findKeyIndexAtLine(activeEvs[j].keys, snappedLine, k2l);
-                const nextEv = applyMicrotoneToEvent(
-                  activeEvs[j],
-                  microtoneMode,
-                  clickedKeyIndex>=0?clickedKeyIndex:undefined
-                );
-                updateHitEvent(j, (targetEv) => {
-                  if(targetEv.isRest)return null;
-                  const latestKeyIndex = clickedKeyIndex>=0
-                    ? findKeyIndexAtLine(targetEv.keys, snappedLine, k2l)
-                    : -1;
-                  return applyMicrotoneToEvent(
-                    targetEv,
-                    microtoneMode,
-                    latestKeyIndex>=0?latestKeyIndex:undefined
-                  );
-                });
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:clickedKeyIndex>=0?clickedKeyIndex:undefined});
-                if (previewAccidentalOnApply) {
-                  playNoteEvent(nextEv, part.playbackInstrument);
-                }
                 return { kind: 'handled' };
               }
               case 'dynamic': {
@@ -7726,10 +7943,45 @@ export default function PianoSystemCanvas({
                 let playEvent = currentEv;
                 let selectedKeyIndex: number | undefined;
                 if(currentEv&&!currentEv.keys.includes(newKey)){
-                  const newKeys=[...currentEv.keys,newKey].sort((a,b)=>k2l(b)-k2l(a));
-                  selectedKeyIndex = newKeys.indexOf(newKey);
-                  playEvent = { ...currentEv, keys: newKeys };
-                  updateHitEvent(j, (targetEv) => targetEv.isRest ? null : {...targetEv,keys:newKeys});
+                  // 並べ替えは「元の位置を貼り付けた札」ごと動かす。こうしておくと
+                  // 並べ替え後に「元の何番目が今どこにいるか」を綴りに頼らず引ける。
+                  // 綴りで引く（indexOf）と、同じ綴りが2つある和音（例: 片方だけ四分音の
+                  // ['a/3','a/3']。微分音では正規のデータ）で両方が先頭へ寄ってしまう
+                  // （#548 round2 P2-1）。
+                  const NEW_KEY_MARK = -1;
+                  const sortedEntries = [
+                    ...currentEv.keys.map((key, oldIndex) => ({ key, oldIndex })),
+                    { key: newKey, oldIndex: NEW_KEY_MARK },
+                  ].sort((a,b)=>k2l(b.key)-k2l(a.key));
+                  const newKeys = sortedEntries.map((entry) => entry.key);
+                  // 元の位置 → 並べ替え後の位置の対応表
+                  const oldIndexToNewIndex = new Map<number, number>();
+                  sortedEntries.forEach((entry, newIndex) => {
+                    if (entry.oldIndex !== NEW_KEY_MARK) oldIndexToNewIndex.set(entry.oldIndex, newIndex);
+                  });
+                  selectedKeyIndex = sortedEntries.findIndex((entry) => entry.oldIndex === NEW_KEY_MARK);
+                  // 和音に足す音にも微分音を乗せる（Issue #548。通常の臨時記号は newKey の綴りで既に乗っている）。
+                  // microtones[] は keyIndex で音を指すので、並べ替え後の位置（selectedKeyIndex）で付ける
+                  const chordMicrotone = getInputMicrotone(tool);
+                  const withChordKey = <T extends NoteEvent>(targetEv: T): T => {
+                    // 既に付いている微分音は「元の keys の位置」で音を指している。音を1つ足すと
+                    // 並べ替えで位置がずれるので、上の対応表で新しい位置へ付け替える。
+                    // 付け替えないと、低い音を足したときに既存の ¼♯ が別の音へ移る（#548 round1 P2-2）。
+                    const remappedMicrotones = targetEv.microtones
+                      ?.map((microtone) => {
+                        const nextIndex = oldIndexToNewIndex.get(microtone.keyIndex) ?? -1;
+                        return nextIndex >= 0 ? { ...microtone, keyIndex: nextIndex } : null;
+                      })
+                      .filter((microtone): microtone is NonNullable<typeof microtone> => microtone !== null);
+                    const merged = {
+                      ...targetEv,
+                      keys:newKeys,
+                      ...(remappedMicrotones ? { microtones: remappedMicrotones } : {}),
+                    } as T;
+                    return chordMicrotone ? applyMicrotoneToEvent(merged, chordMicrotone, selectedKeyIndex!) : merged;
+                  };
+                  playEvent = withChordKey(currentEv);
+                  updateHitEvent(j, (targetEv) => targetEv.isRest ? null : withChordKey(targetEv));
                 }
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:selectedKeyIndex});
                 playNoteEvent(playEvent, part.playbackInstrument);
@@ -7771,7 +8023,7 @@ export default function PianoSystemCanvas({
                   if(paste){
                     setHitScore(prev=>{
                       const next=prev.map(cloneMeasureData);
-                      fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
+                      fillPriorMeasureRests(next, absI, capacityBeatsAt, clefHere);
                       const targetEv=getVoiceEvents(next[absI], hitVoice)[j];
                       if(!targetEv?.isRest)return prev;
                       // 最新データで計画を作り直す（クリック時点の描画データは古い可能性があるため）。
@@ -7813,7 +8065,20 @@ export default function PianoSystemCanvas({
                 // 休符より左の位置に閾値が偏り「前に音符を挿入」と誤判定される。
                 const noteVisualCenter=restBodyCenterX;
                 const noteAfterRest=lx>=noteVisualCenter;
-                const restReplacement=buildRestEditReplacement(activeEvs[j],key,tool,noteAfterRest,clefHere);
+                /**
+                 * 休符を音符へ置換・分割するとき、入力中の微分音（¼♯・¼♭）も一緒に乗せる（#548 round1 P2-3）。
+                 * 通常の ♯/♭/♮ は key の綴り（applyInputAccidentalToKey）へ既に入っているが、
+                 * 微分音は綴りではなく microtones[] で音を指すので、置換後のイベントへ別に付ける必要がある。
+                 * 付けないと「¼♯ を選んで休符を押すと、記号だけ黙って落ちた音符が置かれる」行き止まりになる。
+                 */
+                const withInputMicrotone = (events: NoteEvent[] | null): NoteEvent[] | null => {
+                  const restMicrotone = getInputMicrotone(tool);
+                  if (!events || !restMicrotone) return events;
+                  // 置換・分割で入る音符は単音（keys が1つ）なので、指す位置は 0 で固定できる。
+                  // 連符グループでの置換は「音符1つ＋休符 N-1 個」なので、休符はそのまま通す。
+                  return events.map((event) => event.isRest ? event : applyMicrotoneToEvent(event, restMicrotone, 0));
+                };
+                const restReplacement=withInputMicrotone(buildRestEditReplacement(activeEvs[j],key,tool,noteAfterRest,clefHere));
                 if(restReplacement){
                   // 休符クリックでは、同音価なら置換、より短い音価なら分割して差し込む。
                   // 音価ツール（音符側）を選んでいるあいだは 1 クリックで置換する（Issue #233）。
@@ -7826,10 +8091,10 @@ export default function PianoSystemCanvas({
                   setHitScore(prev=>{
                     const next=prev.map(cloneMeasureData);
                     // 声部1側の休符補完は従来どおり必要（声部2の拍位置合わせのため）。
-                    fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
+                    fillPriorMeasureRests(next, absI, capacityBeatsAt, clefHere);
                     const targetEv=getVoiceEvents(next[absI], hitVoice)[j];
                     if(!targetEv?.isRest)return prev;
-                    const latestReplacement=buildRestEditReplacement(targetEv,key,tool,noteAfterRest,clefHere);
+                    const latestReplacement=withInputMicrotone(buildRestEditReplacement(targetEv,key,tool,noteAfterRest,clefHere));
                     if(!latestReplacement)return prev;
                     next[absI]=withVoiceEventsUpdated(next[absI], hitVoice, (events)=>{
                       const copy=[...events];
@@ -7970,11 +8235,17 @@ export default function PianoSystemCanvas({
                 const symbolEntry = buildCustomSymbolEntry(ev, cx, stave.getYForLine(0), absI, j, pi, entry.voiceIndex);
                 if (symbolEntry) customSymbolEntries.push(symbolEntry);
                 if (ev.pedalMark) {
+                  // 段またぎ（renderStaff）の音符に付いたペダルは、実際に描かれた五線の下に出す。
+                  // 障害物（noteObstacles）も描画先パートへ帰属しているので、五線・パートを
+                  // 同じ基準でそろえないと自分の低音を避けられない（#604 round1 P1）
+                  const pedalStave = resolveRenderStave(ev);
                   pedalMarkEntries.push({
                     anchorX: cx,
-                    botY: stave.getYForLine(4),
+                    botY: pedalStave.getYForLine(4),
                     mark: ev.pedalMark,
-                    stave,
+                    stave: pedalStave,
+                    // 低音との衝突回避（#604）で「このパートの音符」だけを障害物にするための帰属
+                    partIndex: resolveRenderPartIndexFor(ev),
                   });
                 }
                 if (!ev.isRest && ev.fingering) {
@@ -8561,7 +8832,7 @@ export default function PianoSystemCanvas({
   // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
   // symbolOffsetDraftKey: 矢印キーで記号を動かしている最中だけ変化する文字列。
   // これを入れておかないと、下書きを更新しても五線が描き直されず記号が動いて見えない（Issue #205）。
-  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,normalizedTimeSignatureStyle,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,freeTextFontReadyTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
+  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,normalizedTimeSignatureStyle,timeSignatureNumerator,timeSignatureDenominator,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,freeTextFontReadyTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で
@@ -8584,6 +8855,46 @@ export default function PianoSystemCanvas({
       })
     );
     setTimeSigEditState(null);
+  }
+
+  /**
+   * 弱起（アウフタクト＝拍が足りない不完全小節）を確定する（Issue #473）。
+   *
+   * 拍子と同じく全パートの同じ小節へ同じ値を書く（「右手だけ弱起」のような
+   * パート間の食い違いを構造的に作らせないため）。
+   * 音符は勝手に消さない: 容量を超える音符が残っていても、データはそのままにして
+   * 事実だけを通知する（黙って消えるのは #238 の事故と同じ形）。
+   */
+  function handlePickupConfirm(value: string) {
+    if (!pickupEditState) return;
+    const { measureAbsoluteIndex } = pickupEditState;
+    const measuresForMeta = partsScoreRef.current[0] ?? [];
+    // 「拍子未満か」はその小節で有効な拍子（途中拍子変更を解決した値）で判定する
+    const effectiveTimeSignature = resolveTimeSignatureAtMeasure(
+      measuresForMeta, measureAbsoluteIndex, normalizedTimeSignature
+    );
+    const parsed = value === 'none' ? undefined : normalizePickupBeats(Number(value), effectiveTimeSignature);
+    setPartsScore(prev =>
+      prev.map(partData => {
+        if (measureAbsoluteIndex >= partData.length) return partData;
+        const next = partData.map(cloneMeasureData);
+        // 既定（弱起なし）のときは項目自体を消す。旧データとの差分を増やさないため
+        const { pickupBeats: _cleared, ...rest } = next[measureAbsoluteIndex];
+        next[measureAbsoluteIndex] = parsed === undefined ? rest : { ...rest, pickupBeats: parsed };
+        return next;
+      })
+    );
+    if (parsed === undefined) {
+      notifyScoreEdit(describePickupCleared());
+    } else {
+      // 容量を超える音符が残っているかは、いま画面に出ている全パートの実長で見る
+      const overflows = partsScoreRef.current.some((partData) => {
+        const measure = partData[measureAbsoluteIndex];
+        return measure != null && getMeasureDurationBeats(measure) > parsed + 0.0001;
+      });
+      notifyScoreEdit(overflows ? describePickupOverflow(parsed) : describePickupSet(parsed));
+    }
+    setPickupEditState(null);
   }
 
   /**
@@ -9024,6 +9335,64 @@ export default function PianoSystemCanvas({
             <option value="5/4">5/4</option>
             <option value="7/8">7/8</option>
             <option value="12/8">12/8</option>
+          </select>
+        </div>
+      )}
+      {pickupEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: pickupEditState.overlayX,
+            top: pickupEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #7c3aed',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '6px 8px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            minWidth: 200,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#7c3aed', fontFamily: 'sans-serif' }}>
+            弱起（アウフタクト。「解除」で普通の小節に戻す）
+          </span>
+          <select
+            // 開いた瞬間にキーボードで選べるようにする（他の小節メタのオーバーレイと同じ）
+            autoFocus
+            aria-label="弱起（アウフタクト）の長さ"
+            defaultValue={pickupEditState.currentValue || 'none'}
+            style={{
+              fontSize: 13,
+              fontFamily: 'sans-serif',
+              border: '1px solid #ddd',
+              borderRadius: 4,
+              padding: '2px 4px',
+              outline: 'none',
+            }}
+            onChange={(e) => {
+              handlePickupConfirm(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setPickupEditState(null);
+              e.stopPropagation();
+            }}
+            onBlur={(e) => {
+              if (e.relatedTarget === null) setPickupEditState(null);
+            }}
+          >
+            <option value="none">（解除）</option>
+            {buildPickupBeatOptions(
+              resolveTimeSignatureAtMeasure(
+                partsScoreForRender[0] ?? parts[0]?.data ?? [],
+                pickupEditState.measureAbsoluteIndex,
+                normalizedTimeSignature
+              )
+            ).map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
           </select>
         </div>
       )}

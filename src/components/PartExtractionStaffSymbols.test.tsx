@@ -78,6 +78,18 @@ function clickCenter(el: SVGRectElement) {
   fireEvent.click(el, { clientX: x, clientY: y });
 }
 
+/**
+ * 符頭そのものを狙ってクリックする（Issue #548 の統合後、臨時記号の付与は
+ * 「符頭に当たったクリック」だけになったため。セル中央では音符が増えてしまう）。
+ * line は五線の上端の線を 0 とし、0.5 刻みで下へ数えた位置
+ * （ト音譜表なら F5=0・B4=2・G4=3・D4=4.5）。
+ */
+function clickNoteHeadAtLine(el: SVGRectElement, line: number) {
+  const x = (parseFloat(el.getAttribute('data-note-left')!) + parseFloat(el.getAttribute('data-note-right')!)) / 2;
+  const y = parseFloat(el.getAttribute('data-line0-y')!) + line * parseFloat(el.getAttribute('data-line-spacing')!);
+  fireEvent.click(el, { clientX: x, clientY: y });
+}
+
 describe('パート譜表示中の記号編集（Issue #173 第2段階）', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
   beforeEach(() => {
@@ -109,11 +121,13 @@ describe('パート譜表示中の記号編集（Issue #173 第2段階）', () =
   });
 
   it('記譜音のパート譜で臨時記号（♯）を付けると、実音も半音上がって保存される', () => {
+    // Issue #548 でツールの形が「音価ツールに乗る属性」へ変わった（mode: 'accidental' は廃止）
     const { svg, onChange } = renderPart(
-      { mode: 'accidental', accidental: 'sharp' },
+      { duration: '4', isRest: false, accidental: 'sharp' },
       [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }],
     );
-    clickCenter(svg.querySelector('.vf-note-hit') as SVGRectElement);
+    // 記譜音表示では d/4（＝ト音譜表の第1線の1つ下・line 4.5）に符頭が出る
+    clickNoteHeadAtLine(svg.querySelector('.vf-note-hit') as SVGRectElement, 4.5);
     expect(onChange).toHaveBeenCalled();
     const saved = onChange.mock.calls.at(-1)![0][0].events[0];
     // 表示（記譜音 d/4 → d#/4）の半音上げが、実音でも +1 半音として保存される
