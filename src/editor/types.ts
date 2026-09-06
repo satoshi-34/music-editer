@@ -14,7 +14,7 @@ export type Sel = { partIndex: number; measure: number; index: number; keyIndex?
 export type SelectedArcSel = { partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number } | null;
 export type SelectedHairpinSel = { partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number } | null;
 
-// ── 再クリック巡回（Issue #264） ─────────────────────────────
+// ── 再クリック巡回 ────────────────────────────────────────
 // 再クリック巡回（Issue #264）の候補1件ぶん。描画時に当たり判定要素へ紐づけて台帳に積む。
 export type ClickCycleTarget = {
   /**

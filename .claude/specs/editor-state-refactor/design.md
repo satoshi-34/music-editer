@@ -625,8 +625,7 @@ PianoSystemCanvas.tsx: 10,087 → 9443 行（-644）。うち描画 effect か�
 ハンドラ（弧の click / 巡回 / ドラッグ開始）は移した関数の中に**そのまま**入っており、
 setter・ref は引数で受けるだけなので、React の state 遷移は 1 つも変わっていない。
 
-次（段6b）: Pass 3 の中のクリックハンドラ群（`ir.addEventListener` 6905〜、符頭の `hit.addEventListener` 7310〜）を
-`src/editor/handlers/` へ。閉包の setter は「コンテキスト」1 オブジェクトで渡す。段6a と同じ手順（AST で自由変数を列挙 → Deps → 分割代入）。
+次（段6b）: Pass 3 の中のクリックハンドラ群を `src/editor/handlers/` へ。位置・行数・設計は §17 を参照。
 
 ## 17. 段6b の設計（2026-09-06・運用者裁定「設計してから移す。人が読みやすくするためにやる」）
 
@@ -657,9 +656,36 @@ export interface LayerContext {              // 編集レイヤー（#316/#417�
   activeLayerPartIndex: number | undefined; activeVoiceIndex: number; activeLayerHighlightPartIndex: number | null;
 }
 ```
+段6b-1 のレビュー（2026-09-06）で 2 点を直した:
+- **ClickCycleApi は「文脈」ではなく独立モジュール**にする（代替案を採用）。5 関数は PianoSystemCanvas 4555〜4616 に固まり、
+  `clickCycleStateRef / clickCyclePendingRef / 台帳 Map` だけに依存するので、段6a と同じ「Deps → 戻り値」で
+  `src/editor/clickCycle.ts`（`createClickCycle(refs)`）へ切り出せる。ハンドラへは戻り値のオブジェクト 1 つを渡す
+- **台帳と ref は 4 つ目の束 `LedgerContext`** として明示する（`arcIdentityMap / arcGeomMap / notePositionMapP / collectors` と
+  `dragSessionsRef / clickCyclePendingRef`）。これが無いと「引数が減った」の算術が合わない（下の実測表）
+
+```ts
+export interface LedgerContext {             // 描画台帳（effect 内で生成・Pass 3 が埋め・末尾が読む）と、ドラッグ中に読む ref
+  arcIdentityMap; arcGeomMap; notePositionMapP; collectors; dragSessionsRef; clickCyclePendingRef;
+}
+```
+
+注意（ゼロ差のための約束）: SelectionContext の値（selected / selectedArc / selectedHairpin）は **effect 開始時のスナップショット**で、
+live ではない。いまの閉包が捕まえている値と同一なのでゼロ差だが、live が要る所（`latestRef.current.x` を読んでいる箇所）は
+別引数で `latestRef` を渡す。6b-4 で符頭クリックを移すとき `latestRef.current.x` → `ctx.selection.x` の置換をしてはいけない。
+
 残る変数は「対象」（どの小節・どの音符か: `pi / absI / j / activeEvs / stave / clefHere …`）と
 「ツール」（`tool` と、そこから導いた `isSelectTool` など）と「書き込み口」（`setScoreFor / doInsert / updateActiveEvent`）。
 これらは**ハンドラごとの引数**として明示する（文脈に混ぜない。混ぜると「どのハンドラが何を書くか」が見えなくなる）。
+符頭クリックが 10 回読む `dragSessionsRef` も、LedgerContext に隠さず `drag` として明示引数に置く
+（「クリック処理がドラッグ状態を読む」ことを署名に残す。段6c で dragSessions へ寄せる前提）。
+
+段6a の Deps を文脈で書き直したときの引数の数（宣言で数えた見込み。6b-2 で実測に置換する）:
+| Deps | いま | Selection | Layer | Ledger | clickCycle | Svg | 残り（parts など） | 文脈化後 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SpanRendererDeps | 16 | setter 3 | 2 | 4 | 4 | 2 | parts 1 | **6**（selection / layer / ledger / clickCycle / svg / parts） |
+| SystemSpansDeps | 19 | 値 2＋setter 3 | 3 | 2 | 3 | 1 | parts / measuresPerSystem / startMeasureIndex / incomingArcIndex 4 | **9** |
+
+符頭クリック（54 変数）の内訳は 6b-2 の PR で `free-ids.cjs` の出力を「文脈で吸収 / 対象 / ツール / 書き込み口 / それ以外」に分類して表にし、6b-4 の審査基準にする。
 
 ### ハンドラの形
 ```ts
@@ -681,7 +707,8 @@ export function handleNoteClick(
 | 段 | 内容 | ゼロ差の根拠 |
 | --- | --- | --- |
 | 6b-1 | `src/editor/types.ts` を新設し、純データ型（Sel / SelectedArcSel / SelectedHairpinSel / ClickCycleTarget / ArcGeom / ArcIdentityP / NotePositionP / DragSessions / PendingClickCycle）を寄せる。renderPipeline の import 先を types へ | 型の移動のみ・tsc |
-| 6b-2 | 文脈 3 つの型を types.ts に置き、PianoSystemCanvas の描画 effect 冒頭で 3 つのオブジェクトを 1 回だけ作る。段6a の Deps（SpanRendererDeps / SystemSpansDeps）を文脈で書き直す（呼び出し側の引数が 16→7、19→9 に減る） | 本文無変更・引数の束ね直しのみ |
+| 6b-2 | `src/editor/clickCycle.ts`（createClickCycle）を切り出し、文脈 3 つ（Selection / Layer / Ledger）の型を types.ts に置き、描画 effect 冒頭で 1 回だけ作る。段6a の Deps を文脈で書き直す（引数 16→6、19→9 の見込み。実測して表を更新） | 本文無変更・引数の束ね直しのみ |
+| （並行・別 PR） | `PartConfig`（props 型）は PianoSystemCanvas に残す。`RenderCollectors`（描画台帳の塊）は段6c で `LedgerContext` の内側へ移す。`ClefType` の `utils/clefUtils` への移設は別の小 PR（import 先の一括置換） | — |
 | 6b-3 | 小節背景クリック（115 行）と声部2クリック（19 行）を `handlers/measureClick.ts` / `handlers/voice2Click.ts` へ。対象・ツール・書き込み口を引数化 | 本文無変更・AST で自由変数を列挙 |
 | 6b-4〜 | 符頭クリック（744 行）をモードごとに割って移す。1 PR で 2〜3 モード | 各モードの分岐は既に `NoteClickOutcome` を返す独立した塊 |
 | 6b-末 | 符頭の mousedown/mouseup・拍範囲ドラッグ → 段6c（dragSessions）へ引き継ぎ | — |

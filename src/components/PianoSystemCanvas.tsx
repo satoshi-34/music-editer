@@ -253,7 +253,6 @@ import { drawSystemSpans } from '../editor/renderPipeline/systemSpans';
 import type {
   Sel, SelectedArcSel, SelectedHairpinSel, ClickCycleTarget, ArcGeom, ArcIdentityP, NotePositionP, DragSessions, PendingClickCycle,
 } from '../editor/types';
-export type { Sel, SelectedArcSel, SelectedHairpinSel, ClickCycleTarget, ArcGeom, ArcIdentityP, NotePositionP, DragSessions } from '../editor/types';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
