@@ -941,16 +941,16 @@ export function describeVoiceAdded(layerLabel: string): string {
   return `${layerLabel}を追加しました。このまま入力すると新しい声部に入ります`;
 }
 
-/**
- * 声部の上限に達していて「＋」が押せないときの理由（Issue #417・#318「行き止まりは喋る」）。
- * 減らす専用のUIは無い（空の声部は音符を消すと自動で畳まれる）ので、
- * その代替手順まで含めて言う。
- */
 /** V キーで巡回する声部が 1 本しか無いときの通知（#417 round2 P3・#318「行き止まりは喋る」） */
 export function describeVoiceCycleUnavailable(): string {
   return '声部は1つだけです。レイヤーの「＋」で声部を追加すると V で切り替えられます';
 }
 
+/**
+ * 声部の上限に達していて「＋」が押せないときの理由（Issue #417・#318「行き止まりは喋る」）。
+ * 減らす専用のUIは無い（空の声部は音符を消すと自動で畳まれる）ので、
+ * その代替手順まで含めて言う。
+ */
 export function describeVoiceLimitReached(maxVoices: number): string {
   return `声部は1つの段につき${maxVoices}つまでです。使わない声部は音符をすべて消すと自動で消えます`;
 }

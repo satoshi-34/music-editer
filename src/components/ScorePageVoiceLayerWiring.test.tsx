@@ -137,6 +137,17 @@ describe('声部レイヤーの一般化の配線（#417）', () => {
     vi.restoreAllMocks();
   });
 
+  it('声部が 1 本のとき V を押すと、巡回せずに理由を通知する（round2 P3・#318）', async () => {
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-hit')).toBeTruthy(); }, { timeout: 20000 });
+    expect(layerChipNames()).toEqual(['声部1']);
+    fireEvent.keyDown(window, { key: 'v' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('edit-notice')?.textContent).toContain('声部は1つだけです');
+    }, { timeout: 15000 });
+    expect(currentLayerName()).toBe('声部1');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('単旋律譜でも声部を足して切り替えられ、入力した音符が声部3へ入る', async () => {
     render(<ScorePage />);
     await waitFor(() => {

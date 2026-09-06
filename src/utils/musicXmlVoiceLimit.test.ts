@@ -36,3 +36,27 @@ describe('MusicXML の声部上限', () => {
     expect(result.voicesOverLimitMeasureCount).toBeUndefined();
   });
 });
+
+describe('大譜表の <voice> 通し番号（round3 P1-1）', () => {
+  it('下段を voice 5・6 で書く Finale/MuseScore 流の大譜表では、上限超えとは数えない', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>16</duration><voice>1</voice><type>whole</type><staff>1</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>E</step><octave>4</octave></pitch><duration>16</duration><voice>2</voice><type>whole</type><staff>1</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>C</step><octave>3</octave></pitch><duration>16</duration><voice>5</voice><type>whole</type><staff>2</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>G</step><octave>2</octave></pitch><duration>16</duration><voice>6</voice><type>whole</type><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const result = parseMusicXmlWithDefaults(xml);
+    expect(result.voicesOverLimitMeasureCount).toBeUndefined();
+    expect(result.score.parts.length).toBe(2);
+  });
+});

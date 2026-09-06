@@ -437,17 +437,38 @@ function countUnsupportedDynamics(root: Element): number {
 /**
  * 上限（4声/段）を超える声部を持つ <measure> の数を数える（#417 Codex round1 P1-4）。
  * 取り込みでは5声目以降を捨てるので、捨てた事実を画面へ返して通知させる（#318）。
- * countUnsupportedDynamics と同じく、取り込み本体とは独立に XML から数える。
+ * countUnsupportedDynamics と同じく、取り込み本体とは独立に XML から数えるが、数え方は本体と
+ * そろえる（round3 P1-1）: <voice> 番号は五線をまたいだ通し番号（Finale/MuseScore の大譜表は
+ * 下段を voice 5・6 で書く）なので、生の番号ではなく「パート全体で五線ごとに付け直した番号」で判定する。
  */
 function countVoicesOverLimit(root: Element): number {
   let count = 0;
-  for (const measureEl of Array.from(root.querySelectorAll('measure'))) {
-    let maxVoice = 1;
-    for (const voiceEl of Array.from(measureEl.querySelectorAll('note > voice'))) {
-      const n = Number(voiceEl.textContent ?? '1');
-      if (Number.isFinite(n) && n > maxVoice) maxVoice = n;
+  for (const partEl of Array.from(root.querySelectorAll('part'))) {
+    const measureEls = Array.from(partEl.querySelectorAll('measure'));
+    // 五線ごとの <voice> 番号一覧（親音のみ・パート全体から一度だけ作る＝本体の globalVoiceNumbers と同じ）
+    const voiceNumbersByStaff = new Map<number, number[]>();
+    const parentNotes = (m: Element) => Array.from(m.children).filter((el) => el.tagName === 'note' && !el.querySelector('chord'));
+    for (const m of measureEls) {
+      for (const el of parentNotes(m)) {
+        const v = parseInt(el.querySelector('voice')?.textContent ?? '', 10);
+        if (!Number.isInteger(v) || v < 1) continue;
+        const staff = staffNumberOf(el);
+        const list = voiceNumbersByStaff.get(staff) ?? [];
+        if (!list.includes(v)) list.push(v);
+        voiceNumbersByStaff.set(staff, list);
+      }
     }
-    if (maxVoice > MAX_VOICES_PER_PART) count += 1;
+    for (const list of voiceNumbersByStaff.values()) list.sort((a, b) => a - b);
+    for (const m of measureEls) {
+      let over = false;
+      for (const el of parentNotes(m)) {
+        const v = parseInt(el.querySelector('voice')?.textContent ?? '', 10);
+        if (!Number.isInteger(v) || v < 1) continue;
+        const rank = (voiceNumbersByStaff.get(staffNumberOf(el)) ?? []).indexOf(v) + 1;
+        if (rank > MAX_VOICES_PER_PART) { over = true; break; }
+      }
+      if (over) count += 1;
+    }
   }
   return count;
 }
