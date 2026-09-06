@@ -70,10 +70,13 @@ describe('ScorePage: アンマウント時のタイマー片付け（CIフレー
   let clientWidthSpy: PropertyDescriptor | undefined;
   /** 予約されたが「発火も clearTimeout もされていない」タイムアウト ID → 遅延ms */
   const pendingTimeouts = new Map<unknown, number>();
-  /** 保留中のうち通知系とみなす（1秒以上の）予約の件数。
-   *  waitFor 自身の内部タイマーは resolve 時に clearTimeout されるためここには残らない。 */
-  const pendingLongTimeouts = () =>
-    Array.from(pendingTimeouts.values()).filter(ms => ms >= 1000).length;
+  /** 通知系タイマーの実値（restoreNotice / autoSaveStatus の 3000ms）。
+   *  「1秒以上」のような幅のある条件だと waitFor 自身の内部タイマー
+   *  （timeout 予約 10000ms/30000ms がモック経由で記録される）まで数えてしまい、
+   *  通知タイマーが 1 本も無くても前提条件が自己充足する。ちょうど 3000ms に絞る。 */
+  const NOTICE_TIMER_MS = 3000;
+  const pendingNoticeTimeouts = () =>
+    Array.from(pendingTimeouts.values()).filter(ms => ms === NOTICE_TIMER_MS).length;
   const origSetTimeout = globalThis.setTimeout;
   const origClearTimeout = globalThis.clearTimeout;
 
@@ -130,7 +133,7 @@ describe('ScorePage: アンマウント時のタイマー片付け（CIフレー
       expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
     }, { timeout: 30000 });
     await waitFor(() => {
-      expect(pendingLongTimeouts(), '通知系（3秒以上）のタイマーが張られていること').toBeGreaterThan(0);
+      expect(pendingNoticeTimeouts(), '通知系（ちょうど3000ms）のタイマーが張られていること').toBeGreaterThan(0);
     }, { timeout: 10000 });
 
     // 通知タイマーが発火する前にアンマウントする。cleanup 漏れがあると保留中のまま残り、
