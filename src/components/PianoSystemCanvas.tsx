@@ -28,7 +28,7 @@ import type { Tool } from './Palette';
 // 保存データそのものを扱うヘルパー（声部をまたぐ書き込み先の解決など）では、
 // ストレージ側の完全な型が要るので StoredNoteEvent という別名で読み込む。
 import type { MeasureData, NoteEvent as StoredNoteEvent, TieArc, HairpinMark, DynamicMarking, CustomSymbolDef, OrnamentType, AdjustableSymbolKind, ArticulationMarking, TimeSignatureStyle } from '../types/storage';
-import { applyOrnamentToEvent, ornamentToVexCode } from '../utils/ornamentUtils';
+import { ornamentToVexCode } from '../utils/ornamentUtils';
 import type { ClefType } from './clefUtils';
 import {
   defaultRestDisplayKey,
@@ -46,6 +46,7 @@ import { createClickCycle } from '../editor/clickCycle';
 import { handleMeasureBackgroundClick } from '../editor/handlers/measureClick';
 import { handleVoice2NoteClick } from '../editor/handlers/voice2Click';
 import { articulationNoteClick, customSymbolNoteClick, dynamicNoteClick } from '../editor/handlers/noteClick/symbolAttach';
+import { ornamentNoteClick, ottavaNoteClick, pedalNoteClick } from '../editor/handlers/noteClick/symbolToggle';
 import type { NoteTarget, NoteWriter } from '../editor/handlers/noteClick/types';
 import { getInputAccidental, getInputMicrotone } from '../editor/inputAccidental';
 import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY, estimatePedalBottomExtensionPx, PEDAL_TEXT_DESCENT_PX } from '../utils/pedalBridgeUtils';
@@ -70,8 +71,6 @@ import {
   describePickupCleared,
   describePickupOverflow,
   describePickupSet,
-  describeOttavaPlaced,
-  describeOttavaRemoved,
   describeSymbolToolUnavailable,
   describeTupletGroupPasteUnavailable,
   describeTupletNumberToggleUnavailable,
@@ -7253,44 +7252,12 @@ export default function PianoSystemCanvas({
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
                 return { kind: 'handled' };
               }
-              case 'ornament': {
-                // 装飾記号×休符は旧実装どおり既定処理へ（休符の選択/挿入になる）
-                if (clickedIsRest) return { kind: 'passThrough' };
-                const ornamentMode = (tool as any).ornamentType as OrnamentType;
-                // 装飾記号（トリル・モルデント・プラルトリラー・ターン）をトグルで付け外しする
-                updateHitEvent(j, (targetEv) => targetEv.isRest ? null : applyOrnamentToEvent(targetEv, ornamentMode));
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
-                return { kind: 'handled' };
-              }
-              case 'pedal': {
-                // ペダルは休符にも付くが、全休符プレースホルダーは実データが無いので既定処理へ
-                if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return { kind: 'passThrough' };
-                const pedalMode = (tool as any).pedalType as 'down' | 'up';
-                // ペダル記号をトグルで付け外しする
-                updateHitEvent(j, (targetEv) => ({
-                  ...targetEv,
-                  pedalMark: targetEv.pedalMark===pedalMode?undefined:pedalMode,
-                }));
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
-                return { kind: 'handled' };
-              }
-              case 'ottava': {
-                // オッターバも休符に付く。プレースホルダーだけ既定処理へ（ペダルと同じ理由）
-                if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return { kind: 'passThrough' };
-                const ottavaMode = (tool as any).ottavaType as '8va' | '8vb' | '8vaEnd' | '8vbEnd';
-                // オッターバ記号をトグルで付け外しする。
-                // 括弧は開始と終了のペアが揃って初めて描かれるため、開始だけ置いた状態は
-                // 画面に何も出ない。そのまま黙ると「置けない」ように見える（#318・
-                // 実機で誤認 2026-08-26）ので、付け外しのたびに何をしたかと次の一手を伝える
-                const removedOttava = activeEvs[j].ottava === ottavaMode;
-                updateHitEvent(j, (targetEv) => ({
-                  ...targetEv,
-                  ottava: targetEv.ottava===ottavaMode?undefined:ottavaMode,
-                }));
-                notifyScoreEdit(removedOttava ? describeOttavaRemoved(ottavaMode) : describeOttavaPlaced(ottavaMode));
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
-                return { kind: 'handled' };
-              }
+              case 'ornament':
+                return ornamentNoteClick(noteTarget, noteWriter, tool);
+              case 'pedal':
+                return pedalNoteClick(noteTarget, noteWriter, tool);
+              case 'ottava':
+                return ottavaNoteClick(noteTarget, noteWriter, tool);
               case 'textElement': {
                 // テキストも休符に付く。プレースホルダーだけ既定処理へ（ペダルと同じ理由）
                 if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return { kind: 'passThrough' };
