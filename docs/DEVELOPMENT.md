@@ -838,3 +838,12 @@ README の「使い方」は取扱説明として残しつつ、そこに混じ�
 ### アーティキュレーション（奏法記号）
 
 - **描画**: VexFlowのモディファイアは使わず、`StaffCanvas.tsx` / `PianoSystemCanvas.tsx` の両方で円・パス・線による手組みのSVGとして描画する（フェルマータ＝弧＋点、スタッカート＝点、アクセント＝ストロークの山形、テヌート＝横線、マルカート＝塗りつぶした山形）。手組み描画のため、⤢/✥ツールでのサイズ・位置調整に対応している（後述）
+
+
+### 再クリック巡回を変更したときの確認
+
+- 入口と候補台帳は `src/editor/clickCycle.ts`、巡回の純粋な判定は
+  `src/components/clickCycleUtils.ts` にある。Canvas が状態を保持し、描画ごとに入口を作る。
+- 最小の自動確認: `npx vitest --run src/components/clickCycleUtils.test.ts src/components/PianoSystemCanvasClickCycle.test.tsx`。
+- ブラウザでは重なった選択対象を同じ位置で3回クリックし、手前 → 奥 → 手前の順に戻ることを
+  選択表示と DOM で確認する。弧の頂点ハンドルは別のドラッグ操作なので、その範囲を避ける。
