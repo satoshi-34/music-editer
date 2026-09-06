@@ -34,7 +34,7 @@ docker exec -w /app music-editer-dev npm run lint:ratchet
 | 保存/読込がおかしい | `src/utils/storage.ts`（検証・正規化・保存時同期） | `save-load-redesign` / `multi-score-storage` |
 | 再生の音・タイミングがおかしい | `src/audio/ScorePlayer.ts` / `flattenMeasureForPlayback`（voiceMeasureUtils） | `swing-playback` ほか |
 | タイ・スラーの当たり判定・掴んだ瞬間・クリック巡回が変 | `src/editor/renderPipeline/spanRenderer.ts`（`drawArcPathP` の mousedown/mouseup）と `clickCycleUtils` | `click-target-cycling` / `voice2-arc-support` |
-| タイ・スラーのドラッグ中の追従・離したときの確定が変 | PianoSystemCanvas の弧まわり（`arcDragContextRef` で検索。window の mousemove/mouseup） | `click-target-cycle` ほか |
+| タイ・スラーのドラッグ中の追従・離したときの確定が変 | `src/editor/dragSessions/arcDrag.ts`（window の mousemove/mouseup）と PianoSystemCanvas の `updateArcDragPreview` / `cancelArcDrag`（`arcDragContextRef` で検索） | `click-target-cycle` ほか |
 | 松葉（ヘアピン）・弧の一括描画・段末のオッターバ括弧が変 | `src/editor/renderPipeline/systemSpans.ts` / `ottavaSystemEnd.ts`（#695 段6a で移設。中身は移設前と同じ） | `editor-state-refactor` §16 |
 
 ファイル内の検索は「段3c」「Pass 1」「#244」など**コメント内のキーワード**が目印になるよう書いてある。

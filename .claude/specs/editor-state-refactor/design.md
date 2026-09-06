@@ -952,6 +952,28 @@ updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setText
   約 90 行だけになった。PianoSystemCanvas 8,343 → 8,278 行。通知（notifyScoreEdit）とログは Canvas 側に残す（#318 の契約はテーブルの型で保つ）
 - 検証: 本文の機械比較 IDENTICAL（上記の付け替えを除く）、tsc -b、フルテスト、lint:ratchet 基準値、独立レビュー 1 本
 
+### 段6c-1: window で受けるドラッグ処理 3 本を editor/dragSessions/ へ（2026-09-07）
+
+- `src/editor/dragSessions/windowSafety.ts` … `attachDragWindowSafety(deps)`（ドラッグ後始末の安全弁: window の mouseup / pointerup /
+  pointercancel。本文 49 行）。deps は `dragSessionsRef / tiePreviewPathRef / cancelActiveDragSessions` の 3 つ
+- `src/editor/dragSessions/arcDrag.ts` … `attachArcDragWindowListeners(deps)`（弧の端点・曲率ドラッグの mousemove / mouseup。本文 109 行）。
+  deps は `dragSessionsRef / arcDragContextRef / clickCyclePendingRef / setPartsScore / updateArcDragPreview` の 5 つ
+- `src/editor/dragSessions/symbolOffsetDrag.ts` … `attachSymbolOffsetDragWindowListeners(deps)`（記号のドラッグ移動 #522 の pointermove /
+  pointerup。本文 66 行）。deps は `dragSessionsRef / arcDragContextRef / symbolOffsetDragRef / markOffsetOverlayKeyAdjust` の 4 つ。
+  遊びのしきい値 `SYMBOL_DRAG_START_THRESHOLD_PX` はこのファイルだけが使うので、コメントごと一緒に移した（export しない）
+- 形はどれも「useEffect の本文をそのまま関数にし、戻り値をリスナ解除の関数にする」。Canvas 側は
+  `useEffect(() => attachXxx({ … }), [同じ deps])` の 1 行で、effect の依存配列は変えていない。effect の見出しコメント（window で受ける理由）は
+  関数の JSDoc として移し、Canvas には 1 行の案内だけ残した
+- 型を 2 つ `editor/types.ts` へ: `ArcDragContext`（svg / svgRoot / arcGeomMap）と `SymbolOffsetDragApi`（applyDraft / commit。中の説明は移設前のまま）。
+  Canvas の 2 つの useRef はこれを参照する（中身の型は同一）
+- `updateVoiceEventInMeasures`（弧が属する声部の中でイベントを書き換える純関数。Canvas のモジュール関数・34 行）は arcDrag が使うので
+  `src/utils/voiceEventUpdate.ts` へ移し、Canvas は import して従来どおり 7 か所で使う。`StoredNoteEvent` の別名を `NoteEvent` に戻しただけで本文不変
+- 残り（6c-2 の候補）: 譜面側のリスナ 3 つ＝拍範囲スライスのドラッグ（`el` の mousedown / mouseenter / mousemove・自由変数 11）、
+  符頭のタイ／松葉ドラッグ（`hit` の mousedown / mouseup・自由変数 22）、svg のタイ／松葉プレビュー（svg の click / mousemove / mouseup）。
+  `cancelActiveDragSessions / cancelArcDrag / updateArcDragPreview`（useCallback・Canvas の state を触る）は Canvas に残す
+- PianoSystemCanvas 8,278 → 7,991 行
+- 検証: 本文の機械比較 IDENTICAL（3 関数＋ヘルパ＋移した JSDoc・定数）、tsc -b、フルテスト、lint:ratchet 基準値、独立レビュー 1 本
+
 ### 段6b-2 の先行分割: 巡回判定の依存方向整理（2026-09-06）
 
 - PR #698 の後続として、純粋判定 `clickCycleUtils.ts` と単体テストを components から

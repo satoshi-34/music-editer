@@ -45,6 +45,10 @@ import {
 import { computeArcGeometry, computeArcTaperGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
 import type { ClickCycleState } from '../editor/clickCycleUtils';
 import { createClickCycle } from '../editor/clickCycle';
+import { attachDragWindowSafety } from '../editor/dragSessions/windowSafety';
+import { attachArcDragWindowListeners } from '../editor/dragSessions/arcDrag';
+import { attachSymbolOffsetDragWindowListeners } from '../editor/dragSessions/symbolOffsetDrag';
+import { updateVoiceEventInMeasures } from '../utils/voiceEventUpdate';
 import { handleMeasureBackgroundClick } from '../editor/handlers/measureClick';
 import { handleVoice2NoteClick } from '../editor/handlers/voice2Click';
 import { dispatchNoteClick, type NoteReader, type NoteTarget, type NoteUiWriter, type NoteWriter } from '../editor/handlers/noteClick';
@@ -273,6 +277,7 @@ import type {
   LayerContext,
   LedgerContext,
   SvgContext,
+  ArcDragContext, SymbolOffsetDragApi,
   AdjustTarget, OverlayStates, OverlayKind, OverlayUnion, SelectionSlot, SelectionPayloads, SelectionUnion, EditorLocalState, EditorLocalAction,
 } from '../editor/types';
 
@@ -307,41 +312,6 @@ type RenderedVoiceEntry = {
   // （段またぎを使っていない譜面は従来とまったく同じ経路を通す＝1pxも変えない）。
   hasCrossStaffNote: boolean;
 };
-
-/**
- * 弧（タイ／スラー）・松葉が載っているイベントを「その弧が属する声部の中で」書き換える（Issue #190）。
- *
- * 弧の終点（toEventIndex / endEvent）は、始点と同じ声部の events 配列の位置を指す
- * （設計メモ `.claude/specs/voice2-arc-support/design.md` の案A）。
- * したがって保存先も必ず同じ声部にそろえないと、声部2をドラッグしたのに
- * 声部1の同じ位置のイベントを書き換える「無言のデータ破壊」が起きる（#112 のタイ誤爆と同じ形）。
- *
- * - 対象のイベントが実在しないとき、または compute が null を返したときは null を返す。
- *   呼び出し側は「何もしない（prev をそのまま返す）」を選べる
- * - withVoiceEventsUpdated は voices を voiceIndex の数まで生やすが、ここは
- *   「対象イベントが実在する小節」しか通らないため、空の voices[1] は作られない（#112 の教訓）
- */
-function updateVoiceEventInMeasures(
-  measures: MeasureData[],
-  voiceIndex: number,
-  measureIndex: number,
-  eventIndex: number,
-  compute: (event: StoredNoteEvent) => StoredNoteEvent | null,
-): MeasureData[] | null {
-  const target = measures[measureIndex];
-  if (!target) return null;
-  const current = getVoiceEvents(target, voiceIndex)[eventIndex];
-  if (!current) return null;
-  const nextEvent = compute(current);
-  if (!nextEvent) return null;
-  const next = measures.map(cloneMeasureData);
-  next[measureIndex] = withVoiceEventsUpdated(next[measureIndex], voiceIndex, (events) => {
-    const copy = [...events];
-    copy[eventIndex] = nextEvent;
-    return copy;
-  });
-  return next;
-}
 
 export type PartConfig = {
   clef: ClefType;
@@ -427,11 +397,6 @@ const FERMATA_ARC_INNER_RY = 5.2;
 // 内側の弧の頂点（5.2）とぶつからない位置に収まる（2.8 + 1.9 = 4.7 < 5.2）。
 const FERMATA_DOT_CENTER_Y = 2.8;
 const FERMATA_DOT_RADIUS = 1.9;
-// 記号のドラッグ移動（Issue #522）が始まるまでの遊び（画面px）。
-// これを超えるまでは「クリック（＝記号を選ぶ）」のまま扱う。押した指のわずかな震えで
-// 記号が動いて Undo 履歴が増えるのを防ぐための下限で、タイ/松葉のプレビュー開始判定
-// （4px）と同じ「画面px基準の小さなしきい値」の流儀にそろえてある。
-const SYMBOL_DRAG_START_THRESHOLD_PX = 3;
 
 
 // 青い選択枠はクリック不可の見た目です。見た目だけ調整したい場合はここを変更。
@@ -2876,12 +2841,7 @@ export default function PianoSystemCanvas({
   // window のハンドラは1回だけ登録して使い回すため、そのままだと登録した回の
   // 古い state を掴んだままになる。state を読む処理はここで毎レンダー差し替える。
   const symbolOffsetEditStateRef = useRef(symbolOffsetEditState);
-  const symbolOffsetDragRef = useRef<{
-    /** 下書き（画面上の見た目）を x, y へそろえる。矢印キーと同じ出口 */
-    applyDraft: (x: number, y: number) => void;
-    /** ドラッグを離した時点の確定。入力欄の現在値をそのまま保存経路へ流す */
-    commit: () => void;
-  }>({ applyDraft: () => {}, commit: () => {} });
+  const symbolOffsetDragRef = useRef<SymbolOffsetDragApi>({ applyDraft: () => {}, commit: () => {} });
   // 依存配列なし＝毎レンダー実行。React が state を更新したら必ずここも更新される
   useEffect(() => {
     symbolOffsetEditStateRef.current = symbolOffsetEditState;
@@ -2948,11 +2908,7 @@ export default function PianoSystemCanvas({
   // 弧のドラッグ中に「いまの SVG と弧の形状台帳」を参照するための口。
   // ドラッグ中の更新は window の mousemove で受けるため（後述の理由）、
   // 描画 useEffect の中だけにあるローカル変数へは触れない。描画のたびにここを差し替える。
-  const arcDragContextRef = useRef<{
-    svg: SVGSVGElement;
-    svgRoot: SVGGElement;
-    arcGeomMap: Map<string, ArcGeom>;
-  } | null>(null);
+  const arcDragContextRef = useRef<ArcDragContext | null>(null);
 
   // 直前のドラッグで弧の形を変えたか。ドラッグの終わりに必ず来る click で
   // 選択を解除してしまわないよう、1回だけ読み飛ばすために使う。
@@ -3184,57 +3140,8 @@ export default function PianoSystemCanvas({
   // 「SVG 外で離しても1回だけ確定」を担当しているので、ここで触ると確定を壊す）。
   // pointercancel: mouseup が来ない経路なので、弧・小節範囲も含めて全部キャンセルする
   //（弧を確定しないのは、OS 都合の中断を保存とみなさないため）。
-  useEffect(() => {
-    const onWindowMouseUp = () => {
-      dragSessionsRef.current.tieStart = null;
-      if (tiePreviewPathRef.current) tiePreviewPathRef.current.style.display = 'none';
-      // キャンセル起因で立てた「click 1回読み飛ばし」フラグの安全弁: click は mouseup の
-      // 直後・setTimeout(0) より先に配送されるので（確定パスの既存前提と同じ）、
-      // click が来なければタイマーが解除し、来ていれば消費済みの false を false にするだけ
-      if (
-        dragSessionsRef.current.arcCp == null &&
-        dragSessionsRef.current.arcEp == null &&
-        dragSessionsRef.current.arcMoved
-      ) {
-        setTimeout(() => { dragSessionsRef.current.arcMoved = false; }, 0);
-      }
-      // 記号ドラッグ側の同じ安全弁（#522 round1 P2）: ツール切替の中断で
-      // symbolOffset は null・symbolOffsetMoved は true のまま残る。合成 click が
-      // 来ない場所で離すとフラグが残留し、後日の最初の譜面クリックが1回捨てられる
-      if (
-        dragSessionsRef.current.symbolOffset == null &&
-        dragSessionsRef.current.symbolOffsetMoved
-      ) {
-        setTimeout(() => { dragSessionsRef.current.symbolOffsetMoved = false; }, 0);
-      }
-    };
-    // pointercancel には mouseup も click も続かないので、click の読み飛ばしは立てない
-    //（立てると解除役の mouseup が来ず、中断後の最初のクリックが1回捨てられる）
-    const onPointerCancel = (e: PointerEvent) => {
-      cancelActiveDragSessions({ suppressNextClick: false, symbolPointerId: e.pointerId });
-    };
-    // 記号ドラッグ側の安全弁だけは pointerup でも効かせる（round2 P2: タッチでは mouseup が
-    // 保証されず、preventDefault で互換 mouse イベントも抑止され得る）。
-    // onWindowMouseUp をそのまま pointerup へ登録してはいけない（round3 P1）:
-    // 通常マウスでは pointerup が mouseup より先に来るため、タイ/松葉の掃除
-    //（tieStart=null）が確定処理より先に走り、applyArc/applyHairpin へ到達しなくなる
-    const onWindowPointerUp = () => {
-      if (
-        dragSessionsRef.current.symbolOffset == null &&
-        dragSessionsRef.current.symbolOffsetMoved
-      ) {
-        setTimeout(() => { dragSessionsRef.current.symbolOffsetMoved = false; }, 0);
-      }
-    };
-    window.addEventListener('mouseup', onWindowMouseUp);
-    window.addEventListener('pointerup', onWindowPointerUp);
-    window.addEventListener('pointercancel', onPointerCancel);
-    return () => {
-      window.removeEventListener('mouseup', onWindowMouseUp);
-      window.removeEventListener('pointerup', onWindowPointerUp);
-      window.removeEventListener('pointercancel', onPointerCancel);
-    };
-  }, [cancelActiveDragSessions]);
+  // ドラッグ後始末の安全弁（editor/dragSessions/windowSafety.ts。#695 段6c-1）
+  useEffect(() => attachDragWindowSafety({ dragSessionsRef, tiePreviewPathRef, cancelActiveDragSessions }), [cancelActiveDragSessions]);
 
   // ツール切替の掃除（差分表#1 の続き）: reducer 側のオーバーレイ掃除（TOOL_CHANGED）に
   // 加えて、進行中ドラッグもキャンセルする。数字キー・R キーのショートカットは
@@ -3245,204 +3152,10 @@ export default function PianoSystemCanvas({
     cancelActiveDragSessions();
   }, [toolIdentityKey, cancelActiveDragSessions]);
 
-  /**
-   * 弧のドラッグ中の mousemove / mouseup を window で受ける。
-   *
-   * 以前は描画した <svg> 要素に付けていたが、SVG の高さは五線ぶんしか無く（実測で
-   * 端点ハンドルから下端まで数px）、少し引っぱるだけでカーソルが SVG の外へ出てしまう。
-   * すると mousemove が届かなくなって端点がカーソルから置き去りになり、さらに
-   * SVG の外で指を離すと mouseup も届かないためドラッグ状態が残り、そのあとボタンを
-   * 押していないのに弧がカーソルを追い続ける（Issue #235）。window で受ければ
-   * どこまで引っぱっても・どこで離しても1回だけ確定できる。
-   */
-  useEffect(() => {
-    const onMove = (ev: MouseEvent) => {
-      const drag = dragSessionsRef.current.arcEp ?? dragSessionsRef.current.arcCp;
-      const ctx = arcDragContextRef.current;
-      if (!drag || !ctx) return;
-      drag.moved = true;
-      dragSessionsRef.current.arcMoved = true;
-      const { x, y } = clientToGroup(ctx.svg, ctx.svgRoot, ev.clientX, ev.clientY);
-      updateArcDragPreview(x, y);
-    };
+  // 弧の端点・曲率ドラッグ（window で受ける理由は editor/dragSessions/arcDrag.ts のコメント参照。#695 段6c-1）
+  useEffect(() => attachArcDragWindowListeners({ dragSessionsRef, arcDragContextRef, clickCyclePendingRef, setPartsScore, updateArcDragPreview }), [updateArcDragPreview]);
 
-    const onUp = (ev: MouseEvent) => {
-      // 弧の当たり判定へ預けた巡回の計画は、その要素の mouseup（この window ハンドラより先に走る）で
-      // 実行・破棄される。ここまで残っているのは「SVG の外で離した」等の取りこぼしなので、
-      // 後の無関係なクリックで古い計画が発火しないよう必ず捨てる（Issue #264）。
-      clickCyclePendingRef.current = null;
-      const epDrag = dragSessionsRef.current.arcEp;
-      const cpDrag = dragSessionsRef.current.arcCp;
-      const ctx = arcDragContextRef.current;
-      if (!epDrag && !cpDrag) return;
-      dragSessionsRef.current.arcEp = null;
-      dragSessionsRef.current.arcCp = null;
-      // ドラッグ直後の click（選択解除の読み飛ばし用）が済んだら必ず下ろす。
-      // SVG の外で離すと click 自体が来ないので、タイマーで確実に戻す
-      // （click は mouseup と同じタスクで来るため、0ms のタイマーの方が必ず後になる）。
-      window.setTimeout(() => { dragSessionsRef.current.arcMoved = false; }, 0);
-      // 掴んだだけ（＝選択のためのクリック）なら保存もしない。
-      // 何もしていないのに Undo 履歴が1件増えるのを防ぐ。
-      if (!ctx || !(epDrag?.moved || cpDrag?.moved)) return;
-      const { svg, svgRoot } = ctx;
-      const { x: svgX, y: svgY } = clientToGroup(svg, svgRoot, ev.clientX, ev.clientY);
-
-      if (epDrag) {
-        const newDx = epDrag.originalDx + (svgX - epDrag.startSvgX);
-        const newDy = epDrag.originalDy + (svgY - epDrag.startSvgY);
-        setPartsScore(prev => {
-          // 端点ドラッグの保存先も、弧が載っている声部にそろえる（Issue #190）。
-          const partData = updateVoiceEventInMeasures(
-            prev[epDrag.partIndex] ?? [], epDrag.voiceIndex, epDrag.fromMeasure, epDrag.fromEvent,
-            (ev2) => {
-              if (!ev2.arcs?.[epDrag.arcIndex]) return null;
-              const patchedArcs = [...ev2.arcs];
-              const current = patchedArcs[epDrag.arcIndex];
-              patchedArcs[epDrag.arcIndex] =
-                epDrag.segment === '-1' && epDrag.endpoint === 'end'
-                  ? { ...current, breakEndDx: newDx, breakEndDy: newDy }
-                  : epDrag.segment === '-2' && epDrag.endpoint === 'start'
-                    ? { ...current, breakStartDx: newDx, breakStartDy: newDy }
-                    : epDrag.endpoint === 'start'
-                      ? { ...current, startDx: newDx, startDy: newDy }
-                      : { ...current, endDx: newDx, endDy: newDy };
-              return { ...ev2, arcs: patchedArcs };
-            },
-          );
-          if (!partData) return prev;
-          const next = [...prev];
-          next[epDrag.partIndex] = partData;
-          return next;
-        });
-        return;
-      }
-
-      if (cpDrag) {
-        const newOffset = cpDrag.originalOffset + (svgY - cpDrag.startSvgY);
-        // 頂点ハンドル以外のドラッグでは左右位置に触らない（undefined なら保存しない）。
-        // ドラッグ対象セグメントの形状台帳からスパンを引いて比率へ直す。
-        const draggedGeom = ctx.arcGeomMap.get(`${cpDrag.baseArcKey}${cpDrag.segment}`);
-        const newRatio = cpDrag.apex
-          ? clampApexXRatio(
-              cpDrag.originalRatio
-              + (svgX - cpDrag.startSvgX) / (draggedGeom ? (Math.abs(draggedGeom.x2 - draggedGeom.x1) || 1) : 1)
-            )
-          : undefined;
-        setPartsScore(prev => {
-          // 曲率ドラッグ（向き反転を含む）の保存先も声部にそろえる（Issue #190）。
-          const partData = updateVoiceEventInMeasures(
-            prev[cpDrag.partIndex] ?? [], cpDrag.voiceIndex, cpDrag.fromMeasure, cpDrag.fromEvent,
-            (ev2) => {
-              if (!ev2.arcs?.[cpDrag.arcIndex]) return null;
-              const patchedArcs = [...ev2.arcs];
-              const current = patchedArcs[cpDrag.arcIndex];
-              // 段またぎ第2セグメントをドラッグした場合は cpDyOffset2 に保存（第1セグメントとは独立）
-              const offsetPatch = cpDrag.segment === '-2' ? { cpDyOffset2: newOffset } : { cpDyOffset: newOffset };
-              // 頂点の左右位置は膨らみとは別のキーに、同じ「セグメントごとに独立」の考え方で保存する
-              const apexPatch = newRatio === undefined
-                ? {}
-                : cpDrag.segment === '-2' ? { apexXRatio2: newRatio } : { apexXRatio: newRatio };
-              patchedArcs[cpDrag.arcIndex] = {
-                ...current,
-                ...offsetPatch,
-                ...apexPatch,
-                ...(cpDrag.flipApplied ? { flipDirection: !current.flipDirection } : {}),
-              };
-              return { ...ev2, arcs: patchedArcs };
-            },
-          );
-          if (!partData) return prev;
-          const next = [...prev];
-          next[cpDrag.partIndex] = partData;
-          return next;
-        });
-      }
-    };
-
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [updateArcDragPreview]);
-
-  /**
-   * 記号のドラッグ移動（Issue #522）の pointermove / pointerup を window で受ける。
-   *
-   * window で受ける理由は弧のドラッグ（#235）と同じで、さらにもう1つある:
-   * 記号を1px動かすたびに下書きが変わって SVG が作り直されるため、pointerdown を受けた
-   * 当たり判定 rect はドラッグの途中で消える。要素側で pointermove を待つと、
-   * 動かし始めた直後に記号が指から置き去りになってしまう。
-   */
-  useEffect(() => {
-    const onMove = (ev: PointerEvent) => {
-      const drag = dragSessionsRef.current.symbolOffset;
-      const ctx = arcDragContextRef.current;
-      if (!drag || !ctx) return;
-      // つかんだ指/ボタンのポインタ列だけを追う（round1 P2: タッチ対応・多点の混線防止）
-      if (ev.pointerId !== drag.pointerId) return;
-      if (!drag.moved) {
-        // 遊びを超えるまでは「クリック（記号を選ぶ）」のまま。押した指の震えで
-        // 記号が動き、Undo 履歴が1件増えるのを防ぐ
-        if (
-          Math.abs(ev.clientX - drag.startClientX) < SYMBOL_DRAG_START_THRESHOLD_PX
-          && Math.abs(ev.clientY - drag.startClientY) < SYMBOL_DRAG_START_THRESHOLD_PX
-        ) return;
-        drag.moved = true;
-        // 未選択の記号を直接つかんだ場合（Issue #553）は、ここで初めて ✥ を開く。
-        // 押した瞬間ではなくしきい値を超えた時点にするのは、3px 未満で離した操作を
-        // 従来どおりの click（＝記号を選ぶ）に任せきるため
-        if (drag.beginAdjust) {
-          const opened = drag.beginAdjust(ev.clientX, ev.clientY);
-          drag.beginAdjust = null;
-          if (!opened) {
-            // 開けなかった（例: 編集 UI の無い3声以降）。移動はさせず、
-            // 断りの通知を二重に出さないよう、続く click も1回読み飛ばす
-            dragSessionsRef.current.symbolOffset = null;
-            dragSessionsRef.current.symbolOffsetMoved = true;
-            return;
-          }
-        }
-      }
-      const { x, y } = clientToGroup(ctx.svg, ctx.svgRoot, ev.clientX, ev.clientY);
-      // 移動量は毎回「つかんだ時の値 ＋ つかんだ点からの総移動量」で求める。
-      // 上下限の丸め（clamp）は applySymbolOffsetNudge が矢印キーとまったく同じ規則で行う
-      const { x: nextX, y: nextY } = applySymbolOffsetNudge(
-        String(drag.baseX),
-        String(drag.baseY),
-        { dx: Math.round(x - drag.startSvgX), dy: Math.round(y - drag.startSvgY) },
-      );
-      // ドラッグの終わりに必ず来る click を1回読み飛ばすための目印（弧の arcMoved と同じ）
-      dragSessionsRef.current.symbolOffsetMoved = true;
-      // 矢印キーのときと同じく、動かしている間はオーバーレイを透かして
-      // 記号の行き先（周りの音符）を見えるようにする（#385・裁定C）
-      markOffsetOverlayKeyAdjust();
-      symbolOffsetDragRef.current.applyDraft(nextX, nextY);
-    };
-
-    const onUp = (ev: PointerEvent) => {
-      const drag = dragSessionsRef.current.symbolOffset;
-      if (!drag) return;
-      if (ev.pointerId !== drag.pointerId) return;
-      dragSessionsRef.current.symbolOffset = null;
-      // つかんだだけ（＝記号を選ぶためのクリック）なら保存しない
-      if (!drag.moved) return;
-      symbolOffsetDragRef.current.commit();
-      // click が来なかったときの取りこぼしに備えて必ず下ろす
-      // （click は mouseup と同じタスクで来るので、0ms のタイマーの方が必ず後になる）
-      window.setTimeout(() => { dragSessionsRef.current.symbolOffsetMoved = false; }, 0);
-    };
-
-    // mouse ではなく pointer で受ける（round1 P2）: タッチの互換マウスイベントは
-    // 指の移動中の連続 mousemove を配送しないため、mouse 系だけだとタッチでドラッグできない
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    return () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-  }, [markOffsetOverlayKeyAdjust]);
+  useEffect(() => attachSymbolOffsetDragWindowListeners({ dragSessionsRef, arcDragContextRef, symbolOffsetDragRef, markOffsetOverlayKeyAdjust }), [markOffsetOverlayKeyAdjust]);
 
   // タイドラッグの開始情報（再レンダリングを発生させないためref管理）。
   // voiceIndex は「ドラッグを開始した時点のアクティブ声部」。確定（mouseup）時に
