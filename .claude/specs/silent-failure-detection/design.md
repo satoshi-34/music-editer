@@ -184,3 +184,173 @@ ScorePage のタイマーを横串で片付ける方針を定めた。
      recreateAudioEngine を打ち切る。
 - 回帰テスト ScorePageTimerCleanup は保留 setTimeout を追跡して固定する。afterEach で
   追跡中 ID を強制回収してから復元する（退行検出時に実タイマーを残さない）。
+
+
+## 追記: 実音経路（マスターゲイン出口）での判定（issue #618）
+
+### 問題
+
+運用者QAで「タブでは音が出ないのに、コンソールのヘルスチェックは `verdict=healthy /
+signalDetected=true`」という食い違いが2日続けて起きた（#605 コメント・#618）。
+原因は判定の作りにある。従来の `signalDetected` は **destination へ繋がない別経路の
+オシレーター**（無音プローブ）を見ていたため、SoundFont の実音経路（player →
+マスターゲイン → destination）が無音でも「グラフは動いている＝healthy」と言えてしまう。
+同じビルドを別のブラウザペインで開き、マスターゲイン出口に AnalyserNode を挿して測ると
+ピーク 0.04 の信号があり、アプリの経路自体は健全＝**タブ固有の状態**であることも分かっていた。
+また、この状態は「音声復旧（エンジン再構築）」では直らず、タブを開き直すと全快する。
+
+### 修正設計
+
+1. **実音経路に診断用 AnalyserNode を常設**（`src/audio/mainPathAnalyser.ts` 新規）
+   - `ensureMainPathAnalyser(context, existing)`: context ごとに1つだけ作る（作れない環境は null）
+   - `tapOutputToMainPathAnalyser(outputNode, analyser)`: マスターゲインの出口から**枝**を張る。
+     Analyser は出力先へ繋がなくても処理されるので、本線（→ destination）には影響しない
+   - `readMainPathPeak(analyser)`: `getFloatTimeDomainData`（無ければ 8bit 版）でピーク振幅を読む
+   - `startMainPathPeakWatch(analyser)`: 50ms ごとに読んで**最大値を持ち回る**。
+     ヘルスチェックは再生の 600ms 後に走るが、音色プレビュー（0.5秒）は
+     そのときには鳴り終わっているため、発音直後から観測を始めないと山を取りこぼす
+   - 両エンジン（`SoundFontEngine` / `SimpleAudioEngine`）は `getOutputNode()` で
+     マスターゲインを作り直すたびに枝を張り直す。SoundFont は `stopAll()` で
+     マスターゲインを世代交代させるため、「作った時に1回」では次の再生で測れなくなる
+   - `PlaybackEngine.getMainPathAnalyser?()` で画面側へ渡す（診断専用・optional）
+2. **判定の主役を実音経路にする**（`audioOutputHealth.ts`）
+   - 実音経路を測れたときは `signalDetected` をそのピークで決め、**無音プローブは判定に使わない**
+     （プローブは「context が動くか」の補助へ格下げ。実音が無音でも通ってしまうため）
+   - しきい値 `MAIN_PATH_SILENCE_THRESHOLD = 0.001`。実測（Chromium）では正常時 0.006〜0.04、
+     経路が切れているときは厳密に 0.0 だったため、**誤って「壊れています」と出さない側**へ大きく寄せた
+   - `silenceIsExpected`（音量0・休符だけの譜面）のときは実音経路で判定しない
+   - 診断ログに `mainPathPeak=` を必ず出す（切り分けを1行で終わらせるため）
+3. **案内は「タブを開き直す」だけ**（`describeAudioMainPathBroken`）
+   - 実音経路が無音のときは、エンジン再作成（自動復旧）も「音声復旧」ボタンの案内も出さない。
+     実機で効かないことが確認済みの手段を勧めない（#605）
+   - 従来の unhealthy（state が running でない・currentTime が止まる・プローブ無音）は
+     これまでどおり自動復旧＋クールダウンの分岐を通る（回帰なし）
+
+### 検証
+
+- 単体テスト: `mainPathAnalyser.test.ts`（10件・Analyser の作成/分岐/ピーク読取/観測）、
+  `audioOutputHealth.test.ts` に5件追加（実音無音でプローブ有音→unhealthy、実音有音で
+  プローブ無音→healthy、発音直後の観測値の採用、無音が正常なときは判定しない、
+  Analyser が無い環境では従来どおり）
+- 配線テスト: `ScorePageMainPathSilentNotice.test.tsx`（ScorePage 実マウント。
+  `checkAudioOutputHealth` はモックせず、エンジンが返す running な context と
+  無音の Analyser から通しで「タブを開き直す」案内が出ることを固定）
+- 実ブラウザ（Chromium・worktree を dev サーバーへ載せて確認）:
+  - 音色プレビュー → `mainPathPeak=0.0084` / 再生 → `0.0058` で healthy・通知なし
+  - `AnalyserNode.prototype.getFloatTimeDomainData` を「常に無音」へ差し替えると
+    `verdict=unhealthy … mainPathPeak=0.0000` となり、画面に
+    「このタブの音声経路が壊れています。タブを閉じて開き直してください。」が出た
+    （自動再起動の通知は出ない）
+  - 参考計測: 同じブラウザで gain → destination の経路を自作して測ると、
+    無音は厳密に 0.0、440Hz のオシレーターは 1.0。しきい値の根拠にした
+
+### 影響範囲
+
+- `src/audio/mainPathAnalyser.ts` / `.test.ts` — 新規
+- `src/audio/audioOutputHealth.ts` — レポートに `mainPathPeak` / `mainPathSilent` /
+  `probeSignalDetected` を追加（`AudioOutputHealthReport` を組み立てているテストは要更新）
+- `src/audio/PlaybackEngine.ts` — optional メソッド追加（既存実装への破壊的変更なし）
+- `src/audio/SoundFontEngine.ts` / `SimpleAudioEngine.ts` — 枝の張り直しとアクセサ
+- `src/components/ScorePage.tsx` — 観測の開始/停止、新しい案内の分岐、休符だけの譜面の除外
+- `src/utils/scoreEditorNotices.ts` — `describeAudioMainPathBroken` を追加
+
+### やってはいけないこと（追記）
+
+- 実音経路の Analyser を destination へ繋がない（繋ぐ必要は無く、繋ぐと二重出力になる）
+- マスターゲインを作り直したときに枝を張り直し忘れない（SoundFont は停止のたびに作り直す）
+- 実音経路が無音のときに「音声復旧」を案内しない（実機で効かないことが確認済み）
+- しきい値を上げない（正常時のピークは 0.006 程度まで小さくなり得る。上げると誤検知する）
+- ピーク観測（`setInterval`）を止め忘れない（ScorePage はアンマウント・次の予約で必ず stop する）
+
+## 追記: round1 差し戻しへの対応（誤検知2件・Safari 回帰1件。issue #618 round1）
+
+レビューで、上の実装のままだと **正常なタブを「壊れています」と誤報する条件が2つ**あり、
+さらに **Safari の既存の自動復旧が止まる**ことが分かった。ここではその修正設計を残す。
+
+### P1-1 観測窓の外の発音を「鳴るはず」と数えていた（誤検知）
+
+- 問題: 自己診断が実音を測っているのは **再生開始から約 0.85 秒**の窓だけ
+  （600ms 後にチェック開始 → プローブ 250ms）。それなのに「鳴るはずか」の判定
+  （`expectsSound`）は「譜面のどこかに音符があるか」しか見ていなかった。
+  先頭小節が全休符（120BPM で 2 秒の無音）・弱起の休符始まり・休符の拍からの
+  途中再生・60BPM の4分休符では、**正常なタブでも窓の中が無音**になり誤報していた。
+- 修正: 実際にエンジンへ渡す展開済み小節列から「最初に音が鳴り始める時刻」を求め、
+  それが窓の中に入っているときだけ実音経路で判定する。
+  - `findFirstSoundingOnsetMs(measures, bpm, timeSignature, swingEnabled)`
+    （`src/utils/playbackPositionUtils.ts`）。前進規則（小節ごとの拍数・テンポ）は
+    `calculateExpandedPlaybackDurationMs` と、休符を飛ばす規則は `collectLaneNotes`
+    （ハイライト）と共通にして、実音・帯・終了タイマーと同じ時間軸で数える
+  - 窓の長さは `SILENT_FAILURE_CHECK_DELAY_MS + AUDIO_HEALTH_PROBE_MS`
+    − 先読みリード（`scheduleLeadSeconds`。実音はこのぶん遅れて始まる）
+    − `MAIN_PATH_OBSERVATION_SAFETY_MS = 150`（予約や音源ロードのばらつき）。
+    **窓は狭める側にだけ倒す**（狭めすぎても「判定しない」に落ちるだけで、誤報はしない）
+  - 窓の中に発音が無いときは `silenceIsExpected` として実音経路の判定を外す。
+    このとき判定は従来の補助プローブ（healthy / unknown）へ落ちる。
+    「常に unknown」にはしていない: プローブは #618 以前からある
+    「グラフ処理が生きているか」の検査で、その結果まで捨てる理由が無いため
+
+### P1-2 音量スライダー・強弱でピークが縮む（誤検知）
+
+- 問題: `getMasterVolumeGain` は (音量×2)² なので、スライダー 20% で gain 0.16。
+  正常なタブのピーク（実測 0.006）も 0.16 倍の 0.00096 まで縮み、
+  固定しきい値 0.001 を下回って「壊れています」になっていた。pp（velocity 0.22）でさらに縮む。
+- 修正: **しきい値を同じ倍率で縮める**（`options.masterGain`。ScorePage が
+  `getMasterVolumeGain(profile)` を渡す）。無音は誤差ではなく厳密に 0 なので、
+  倍率を掛けても「切れている」は検出できる。
+  - Analyser を**マスターゲインの前**へ置く案（音量非依存）は採らなかった。
+    本線に1ノード挟むか配線を組み替えることになり、再生の本線に触るため
+  - 音量をほぼ 0 まで絞っている（`masterGain < MIN_JUDGEABLE_MASTER_GAIN = 0.01`）ときは
+    実音経路で判定しない（正常な音でも観測誤差の域に入るため）
+
+### P1-3 Safari のレンダリング停止が「タブを開き直す」に化けていた（回帰）
+
+- 問題: レンダリングが止まれば Analyser も 0 になるため `mainPathSilent=true` になり、
+  画面側がそれを先に見て `recreateAudioEngine()` を通らなくなっていた。
+  従来これで直っていた Safari の停止ケース（audio-safari-notes 2.4・REGRESSION E）が
+  復旧しなくなる、設計と実装の食い違い。
+- 修正: `mainPathSilent` は **実音経路だけが死んでいる**状態に限定する。
+  すなわち `ピーク < しきい値 && timeAdvancing && probeSignalDetected !== false`。
+  - `currentTime` が進まない → 従来どおり「レンダリング停止」の unhealthy（自動復旧）
+  - 補助プローブも無音 → 従来どおり「グラフ処理が死んでいる」の unhealthy（自動復旧）
+  - 判定の順序は「時間が止まっている → 実音経路だけ無音 → 実音経路は健全 →
+    プローブ無音 → プローブの結果」。実音経路で信号を観測できたら、
+    プローブが無音でも healthy にする（プローブは別経路なので当てにならない）
+
+### P2 停止・エンジン配線・偽 Analyser
+
+- **停止でヘルスチェックを取り消す**: `stopAll()` はマスターゲインを切り離す
+  （SoundFont は世代交代）ので、停止直後に判定が走るとピーク 0 で誤報する。
+  `cancelOutputHealthCheck()` を `handleStop` から呼び、予約（`setTimeout`）と
+  ピーク観測（`setInterval`）の両方を止める
+- **枝の張り直しをテストで固定**（`mainPathAnalyserEngines.test.ts` 新規）:
+  既存の音声テストの偽 context には `createAnalyser` が無く、枝張りが素通りしていたため、
+  片方のエンジンだけ壊れても気づけなかった。`createAnalyser` を持つ偽 context で、
+  両エンジンとも「マスターゲインの出口 → Analyser」の接続が
+  **世代交代・context 作り直しのたびに張り直される**ことを固定する
+  （#223 → #280 型の「2枚あるうち片方だけ直る」事故の予防）
+- `ScorePagePlaybackWindow.test.tsx` の偽 Analyser は常に 0 を返していたため、
+  そのテストが毎回「壊れています」の分岐を通っていた。有音を返すように直し、
+  停止後の検証も「停止したら試験波形も音符も増えない」（P2 の停止取り消しの担保）へ改めた
+
+### P3
+
+- 8bit 版の Analyser（1 目盛 ≒ 0.0078）では、しきい値より粗くて正常な小さい音を
+  0 に丸めてしまう。`getMainPathPeakResolution()` を見て、
+  **しきい値より粗い環境では実音経路で判定しない**
+- 「タブの音声経路が壊れています」の通知からは
+  「「音の調子がおかしいとき」を開く」の導線を出さない
+  （`PlaybackControls` の `audioHealthNoticeAllowsRecovery`）。
+  効かないと分かっている手段を案内と同時に勧めるのは仕様2と矛盾するため
+- 音は1つも出ていないので、この通知を出すときは**再生も止める**
+  （帯だけが進み続けるのを避ける）。止めたことは通知文にも書く
+
+### 影響範囲（追記ぶん）
+
+- `src/utils/playbackPositionUtils.ts` — `findFirstSoundingOnsetMs` を追加
+- `src/audio/audioOutputHealth.ts` — `masterGain` / しきい値のスケール /
+  判定できる解像度の確認 / `mainPathSilent` の限定 / `AUDIO_HEALTH_PROBE_MS` の公開
+- `src/audio/mainPathAnalyser.ts` — `getMainPathPeakResolution` を追加
+- `src/components/ScorePage.tsx` — 観測窓での `expectsSound`、`masterGain` の受け渡し、
+  停止時の取り消し、通知時の停止、通知と導線の対応付け
+- `src/components/PlaybackControls.tsx` — `audioHealthNoticeAllowsRecovery`
+- `src/utils/scoreEditorNotices.ts` — 通知文に「再生を止めました」を追記

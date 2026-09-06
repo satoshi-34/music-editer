@@ -48,6 +48,16 @@ describe('App.css: 段の選択UIは印刷に出さない（Issue #482）', () =
     expect(css).toMatch(/\.system-gap-drag-handle\s*\{[^}]*bottom\s*:\s*100%/);
   });
 
+  it('パート境界の帯（Issue #572）は段の上端の指定を打ち消して top で置かれる', () => {
+    // 段の上端の帯とスタイルを共用しているため、bottom: 100% を打ち消し忘れると
+    // パート境界の帯まで段の上へ飛ぶ。jsdom では位置を測れないので静的に固定する
+    const css = loadAppCss();
+    expect(css).toMatch(/\.system-gap-drag-handle--part\s*\{[^}]*bottom\s*:\s*auto/);
+    // 印刷側は基底クラス（.system-gap-drag-handle）の display:none がそのまま効く。
+    // 変種にだけ display を復活させるような指定を足していないことも見ておく
+    expect(printBlock(css)).not.toMatch(/\.system-gap-drag-handle--part\s*\{[^}]*display\s*:\s*(?!none)/);
+  });
+
   it('@media print で選択中の薄い枠（outline）も消している', () => {
     const css = printBlock(loadAppCss());
     expect(css).toMatch(/\.system-select-frame--selected\s*\{[^}]*outline\s*:\s*none/);
