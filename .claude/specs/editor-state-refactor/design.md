@@ -937,6 +937,25 @@ updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setText
   連符ツールでのグループ置換・変換表）で移設前の挙動を固定した
 - 検証: 本文の機械比較 IDENTICAL、tsc -b、フルテスト、lint:ratchet 基準値、独立レビュー 1 本（モジュール関数の移動のみ）
 
+### 段6b-末: 符頭クリックの薄い入口 handlers/noteClick/index.ts（2026-09-07）
+
+- `src/editor/handlers/noteClick/index.ts` … `dispatchNoteClick(ctx, target, tool, reader, writer, uiWriter)`。Canvas のリスナに残っていた
+  `flagToolOutcome`（フラグ系テーブル）と「フラグ系 → 既定処理」の評価 IIFE、`customSymbolNameOf` を物理移設（本文 60 行）。
+  §17 の「noteClick.ts は分岐表から各モード関数を呼ぶだけの薄い入口」がこれ。types.ts の 4 束は index から再 export し、
+  Canvas の import は 1 行になった（モード別ファイル 7 つを Canvas が知る必要がない）
+- 本文の変更は機械的な付け替えだけ: 束の変数名 `noteTarget / noteWriter / noteReader / noteUiWriter` → 引数名
+  `target / writer / reader / uiWriter`、`customSymbolDefs` → `uiWriter.customSymbolDefs`（同じ配列）、`{ cycle: clickCycle }` → `ctx`
+  （呼び出し側で同じ形に組んで渡す）。機械比較は同じ置換を原本に当てて IDENTICAL
+- ctx は measureClick と同じく「オブジェクトで受ける」様式（ここでは `{ cycle }`。measureClick は `{ svg, selection, layer }`）に揃えた。
+  voice2Click だけが裸で `cycle` を受けており、これは 6c で dragSessions と一緒に触るときに合わせる
+- `src` 配下で最初のディレクトリ index import（`'../editor/handlers/noteClick'`）。tsconfig は `moduleResolution: bundler`、Vite も index.ts を
+  解決し、import 系の lint 規則は無い。レビューで確認済み
+- レビュー反映でコメント 2 行を直した（ヘッダの「hitResolution の分岐表」→「hitResolution の 3 値結果型を返す分岐表」、移設本文の
+  「通知はここで送る」→「呼び出し側が送る」。コードは不変）
+- Canvas の符頭クリックのリスナは「小節選択・巡回・小節単位ツール（前処理）→ 帰属解決 → 束を作る → dispatchNoteClick → ログ・通知」の
+  約 90 行だけになった。PianoSystemCanvas 8,343 → 8,278 行。通知（notifyScoreEdit）とログは Canvas 側に残す（#318 の契約はテーブルの型で保つ）
+- 検証: 本文の機械比較 IDENTICAL（上記の付け替えを除く）、tsc -b、フルテスト、lint:ratchet 基準値、独立レビュー 1 本
+
 ### 段6b-2 の先行分割: 巡回判定の依存方向整理（2026-09-06）
 
 - PR #698 の後続として、純粋判定 `clickCycleUtils.ts` と単体テストを components から
