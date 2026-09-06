@@ -967,7 +967,7 @@ updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setText
 - 型を 2 つ `editor/types.ts` へ: `ArcDragContext`（svg / svgRoot / arcGeomMap）と `SymbolOffsetDragApi`（applyDraft / commit。中の説明は移設前のまま）。
   Canvas の 2 つの useRef はこれを参照する（中身の型は同一）
 - `updateVoiceEventInMeasures`（弧が属する声部の中でイベントを書き換える純関数。Canvas のモジュール関数・34 行）は arcDrag が使うので
-  `src/utils/voiceEventUpdate.ts` へ移し、Canvas は import して従来どおり 7 か所で使う。`StoredNoteEvent` の別名を `NoteEvent` に戻しただけで本文不変
+  `src/utils/voiceEventUpdate.ts` へ移し、Canvas は import して従来どおり使う（呼び出しは Canvas 4 か所＋arcDrag 2 か所）。`StoredNoteEvent` の別名を `NoteEvent` に戻しただけで本文不変
 - 残り（6c-2 の候補）: 譜面側のリスナ 3 つ＝拍範囲スライスのドラッグ（`el` の mousedown / mouseenter / mousemove・自由変数 11）、
   符頭のタイ／松葉ドラッグ（`hit` の mousedown / mouseup・自由変数 22）、svg のタイ／松葉プレビュー（svg の click / mousemove / mouseup）。
   `cancelActiveDragSessions / cancelArcDrag / updateArcDragPreview`（useCallback・Canvas の state を触る）は Canvas に残す

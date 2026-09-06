@@ -3155,6 +3155,7 @@ export default function PianoSystemCanvas({
   // 弧の端点・曲率ドラッグ（window で受ける理由は editor/dragSessions/arcDrag.ts のコメント参照。#695 段6c-1）
   useEffect(() => attachArcDragWindowListeners({ dragSessionsRef, arcDragContextRef, clickCyclePendingRef, setPartsScore, updateArcDragPreview }), [updateArcDragPreview]);
 
+  // 記号のドラッグ移動（editor/dragSessions/symbolOffsetDrag.ts。#695 段6c-1）
   useEffect(() => attachSymbolOffsetDragWindowListeners({ dragSessionsRef, arcDragContextRef, symbolOffsetDragRef, markOffsetOverlayKeyAdjust }), [markOffsetOverlayKeyAdjust]);
 
   // タイドラッグの開始情報（再レンダリングを発生させないためref管理）。
