@@ -47,14 +47,7 @@ import type { ClickCycleState } from '../editor/clickCycleUtils';
 import { createClickCycle } from '../editor/clickCycle';
 import { handleMeasureBackgroundClick } from '../editor/handlers/measureClick';
 import { handleVoice2NoteClick } from '../editor/handlers/voice2Click';
-import { articulationNoteClick, customSymbolNoteClick, dynamicNoteClick } from '../editor/handlers/noteClick/symbolAttach';
-import { ornamentNoteClick, ottavaNoteClick, pedalNoteClick } from '../editor/handlers/noteClick/symbolToggle';
-import { customSymbolOffsetNoteClick, customSymbolResizeNoteClick, symbolAdjustNoteClick } from '../editor/handlers/noteClick/symbolAdjust';
-import { crossStaffToggleNoteClick, graceNoteNoteClick, tupletNumberToggleNoteClick } from '../editor/handlers/noteClick/scoreToggle';
-import { textElementNoteClick } from '../editor/handlers/noteClick/textElement';
-import { accidentalApplyNoteClick } from '../editor/handlers/noteClick/accidentalApply';
-import { noteDefaultNoteClick, restDefaultNoteClick } from '../editor/handlers/noteClick/defaultOutcome';
-import type { NoteReader, NoteTarget, NoteUiWriter, NoteWriter } from '../editor/handlers/noteClick/types';
+import { dispatchNoteClick, type NoteReader, type NoteTarget, type NoteUiWriter, type NoteWriter } from '../editor/handlers/noteClick';
 import { getInputAccidental, getInputMicrotone } from '../editor/inputAccidental';
 import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY, estimatePedalBottomExtensionPx, PEDAL_TEXT_DESCENT_PX } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
@@ -159,7 +152,6 @@ import {
   resolveNoteHitGeometry,
   resolveHitAttribution,
   type HitAttributionPolicy,
-  type NoteClickOutcome,
 } from '../editor/hitResolution';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 // 自動休符補完は #244 段5-2 で utils へ物理移設（不変条件テストから直接呼ぶため）
@@ -6673,10 +6665,6 @@ export default function PianoSystemCanvas({
               const setHitScore = setScoreFor(hitPi);
               const updateHitEvent = (targetJ: number, compute: Parameters<typeof updateActiveEvent>[1]) =>
                 updateActiveEvent(targetJ, compute, { partIndex: hitPi, voiceIndex: hitVoice });
-              // カスタム記号の日本語名（ユーザーが記号に付けた名前）を id から引く。
-              // 通知の文言と調整オーバーレイで同じ名前を使うため、解決はここ1か所にまとめる。
-              const customSymbolNameOf = (symbolId: string) =>
-                customSymbolDefs.find(d => d.id === symbolId)?.name ?? symbolId;
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY);
               // 対象種別: 休符（全休符プレースホルダー含む）か音符か。
@@ -6705,62 +6693,9 @@ export default function PianoSystemCanvas({
                 setSymbolResizeEditState, setSymbolOffsetEditState, setSymbolAdjustPickerState, setTextEditState, openSymbolAdjustEditor,
                 findSymbolAnchorRect, anchorFromClientPoint, containerRef, customSymbolDefs,
               };
-              /**
-               * フラグ系ツール15モードのテーブル（#244 段3c）。
-               * 各 case が「モード×対象種別（音符/休符/placeholder）」のセルに相当する。
-               * passThrough は既定の対象種別処理（defaultOutcome.ts の noteDefaultNoteClick / restDefaultNoteClick）へ
-               * 続けることを意味し、旧実装で「フラグ分岐のガードに合致せず if 連鎖を
-               * 素通りしていた」経路と1対1に対応する。
-               */
-              const flagToolOutcome = (): NoteClickOutcome => {
-              if (!('mode' in tool)) {
-                // 統合後の臨時記号は mode を持たない「音価ツールの属性」なので、
-                // フラグ系のテーブルへ入る前にここで付与かどうかを判定する（#548）
-                return accidentalApplyNoteClick(noteTarget, noteReader, noteWriter, tool) ?? { kind: 'passThrough' };
-              }
-              switch (tool.mode) {
-              case 'tupletNumberToggle':
-                return tupletNumberToggleNoteClick(noteTarget, noteWriter);
-              case 'crossStaffToggle':
-                return crossStaffToggleNoteClick(noteTarget, noteWriter);
-              case 'dynamic':
-                return dynamicNoteClick(noteTarget, noteWriter, tool);
-              case 'articulation':
-                return articulationNoteClick(noteTarget, noteWriter, tool);
-              case 'customSymbol':
-                return customSymbolNoteClick(noteTarget, noteWriter, tool, customSymbolNameOf);
-              case 'customSymbolResize':
-                return customSymbolResizeNoteClick(noteTarget, noteUiWriter, tool, customSymbolNameOf);
-              case 'customSymbolOffset':
-                return customSymbolOffsetNoteClick(noteTarget, noteUiWriter, tool, customSymbolNameOf);
-              case 'symbolAdjustResize':
-              case 'symbolAdjustOffset':
-                return symbolAdjustNoteClick(noteTarget, noteUiWriter, tool);
-              case 'graceNote':
-                return graceNoteNoteClick(noteTarget, noteWriter);
-              case 'ornament':
-                return ornamentNoteClick(noteTarget, noteWriter, tool);
-              case 'pedal':
-                return pedalNoteClick(noteTarget, noteWriter, tool);
-              case 'ottava':
-                return ottavaNoteClick(noteTarget, noteWriter, tool);
-              case 'textElement':
-                return textElementNoteClick(noteTarget, noteWriter, noteUiWriter, tool);
-              default:
-                // 音価ツール・休符ツールなど、フラグ系ではないツールは既定処理へ
-                return { kind: 'passThrough' };
-              }
-              };
-
-              // テーブルの評価: フラグ系 → （passThrough なら）対象種別の既定処理。
+              // テーブルの評価（editor/handlers/noteClick の薄い入口・#695 段6b-末）: フラグ系 → （passThrough なら）対象種別の既定処理。
               // rejected の通知はここで機械的に送る（#318。テーブル本体は通知手段を知らない）。
-              const outcome = ((): NoteClickOutcome => {
-                const flag = flagToolOutcome();
-                if (flag.kind !== 'passThrough') return flag;
-                return clickedIsRest
-                  ? restDefaultNoteClick(noteTarget, noteReader, noteWriter, tool)
-                  : noteDefaultNoteClick({ cycle: clickCycle }, noteTarget, noteWriter, tool);
-              })();
+              const outcome = dispatchNoteClick({ cycle: clickCycle }, noteTarget, tool, noteReader, noteWriter, noteUiWriter);
               // テスト会の切り分け用（開発時のみ）: クリックが処理に届いたことと、
               // どう裁かれたかをコンソールへ残す。「反応しない」の原因が
               // 当たり判定側か描画側かをこの1行の有無で切り分けられる
