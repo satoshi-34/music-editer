@@ -179,6 +179,21 @@ export interface SvgContext {
   svgRoot: SVGGElement;
 }
 
+/** 弧・記号のドラッグ中に window ハンドラが読む描画文脈（描画 effect が毎回入れ直す。#695 段6c-1 で型を Canvas から移設） */
+export interface ArcDragContext {
+  svg: SVGSVGElement;
+  svgRoot: SVGGElement;
+  arcGeomMap: Map<string, ArcGeom>;
+}
+
+/** 記号ドラッグ（#522）の下書き反映と確定。Canvas が毎レンダー入れ直す ref の中身（段6c-1 で型を移設。説明は移設前のまま） */
+export interface SymbolOffsetDragApi {
+  /** 下書き（画面上の見た目）を x, y へそろえる。矢印キーと同じ出口 */
+  applyDraft: (x: number, y: number) => void;
+  /** ドラッグを離した時点の確定。入力欄の現在値をそのまま保存経路へ流す */
+  commit: () => void;
+}
+
 /** 再クリック巡回（#264）の入口 5 つ。createClickCycle の戻り値そのもの */
 export interface ClickCycleApi {
   registerClickCycleTarget: (el: Element, target: ClickCycleTarget) => void;

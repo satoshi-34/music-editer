@@ -864,6 +864,9 @@ README の「使い方」は取扱説明として残しつつ、そこに混じ�
   臨時記号付与は `noteClick/accidentalApply.ts`、フラグ系が passThrough のときの既定処理（音符セル・休符セル）は `noteClick/defaultOutcome.ts`
 - 音価 ⇄ 拍数の変換と休符クリックの置換・分割の計画は `src/editor/durationTools.ts`（単体テストは同名の .test.ts）。
   拍数計算は `utils/voiceMeasureUtils` の `getDurationBeats` と同値（統合は #711）
+- window で受けるドラッグ処理は `src/editor/dragSessions/`（windowSafety = 後始末の安全弁、arcDrag = 弧の端点・曲率、symbolOffsetDrag = 記号の移動）。
+  どれも「useEffect の本文をそのまま関数にし、解除関数を返す」形で、Canvas は `useEffect(() => attachXxx(deps), [deps])` の 1 行で呼ぶ。
+  弧が属する声部の中でイベントを書き換える `updateVoiceEventInMeasures` は `src/utils/voiceEventUpdate.ts`
 - 最小の自動確認: `npx vitest --run src/components/PianoSystemCanvasMeasureSelect.test.tsx src/components/PianoSystemCanvasTupletHideNumber.test.tsx src/components/PianoSystemCanvasClickCycle.test.tsx`
 - ブラウザ: 音価ツールで小節の空き部分をクリックして音符が入ること、小節選択ツール（または Shift+クリック）で
   小節が選ばれること、別声部の符頭クリックで声部が切り替わることを確認する
