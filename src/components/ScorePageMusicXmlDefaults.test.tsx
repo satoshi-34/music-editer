@@ -340,7 +340,11 @@ describe('ScorePage: MusicXML の <defaults> を作品のレイアウトとし�
     expect(workId).toBeTruthy();
 
     // 譜面本体には触れず、「音符の大きさ」の欄だけを 120% へ
+    // Issue #578 round1 P2 以降、キーボードで打った値が反映されるのは
+    // Enter・フォーカスを外したときの確定だけ（打っている途中の中間値は譜面に当てない）。
+    // そのため、打ったあとに blur を足して「欄から離れた」ところまで再現する。
     fireEvent.change(notationSizeInput(), { target: { value: '120' } });
+    fireEvent.blur(notationSizeInput());
 
     // デバウンス（1.5秒）後の自動保存で作品属性が更新される
     await waitFor(() => {
@@ -357,7 +361,9 @@ describe('ScorePage: MusicXML の <defaults> を作品のレイアウトとし�
 
     // 現在の作品を 120%/12mm にし、個人設定はそれと異なる 130%/10mm にしておく
     fireEvent.change(notationSizeInput(), { target: { value: '120' } });
+    fireEvent.blur(notationSizeInput());
     fireEvent.change(sideMarginInput(), { target: { value: '12' } });
+    fireEvent.blur(sideMarginInput());
     localStorageMock.setItem('score-notation-size', '1.3');
     localStorageMock.setItem('score-page-margin-side', '10');
 

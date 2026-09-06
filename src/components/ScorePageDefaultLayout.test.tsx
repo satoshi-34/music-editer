@@ -112,9 +112,15 @@ describe('音符の大きさ・段の間隔・パート間隔の楽譜種別ご�
     openLayoutTab();
 
     // ユーザーが手動でスライダーを動かす（明示的な設定）
+    // Issue #578 round1 P2 以降、キーボードで打った値が反映されるのは
+    // Enter・フォーカスを外したときの確定だけ（打っている途中の中間値は譜面に当てない）。
+    // そのため、打ったあとに blur を足して「欄から離れた」ところまで再現する。
     fireEvent.change(getNotationSizeInput(), { target: { value: '120' } });
+    fireEvent.blur(getNotationSizeInput());
     fireEvent.change(getSystemRowGapInput(), { target: { value: '10' } });
+    fireEvent.blur(getSystemRowGapInput());
     fireEvent.change(getPartSpacingInput(), { target: { value: '5' } });
+    fireEvent.blur(getPartSpacingInput());
     expect(getNotationSizeInput().value).toBe('120');
     expect(getSystemRowGapInput().value).toBe('10');
     expect(getPartSpacingInput().value).toBe('5');
@@ -140,7 +146,9 @@ describe('音符の大きさ・段の間隔・パート間隔の楽譜種別ご�
 
     // 段の間隔・パート間隔を手動でずらしてから「レイアウトをリセット」を押す
     fireEvent.change(getSystemRowGapInput(), { target: { value: '-5' } });
+    fireEvent.blur(getSystemRowGapInput());
     fireEvent.change(getPartSpacingInput(), { target: { value: '-5' } });
+    fireEvent.blur(getPartSpacingInput());
     expect(getSystemRowGapInput().value).toBe('-5');
     expect(getPartSpacingInput().value).toBe('-5');
 
@@ -163,6 +171,8 @@ describe('音符の大きさ・段の間隔・パート間隔の楽譜種別ご�
     expect(input.max).toBe('50');
 
     fireEvent.change(input, { target: { value: '-60' } });
+
+    fireEvent.blur(input);
     expect(getSystemRowGapInput().value).toBe('-60');
     expect(localStorageMock.getItem('score-system-row-gap')).toBe('-60');
 

@@ -5,6 +5,7 @@
 //   - 9項目が spinbutton になり、値域・ステップはスライダーのときと同じ
 //   - 単位（mm / px / %）が欄の横に出ている
 //   - 直接打って Enter で反映され、localStorage への保存も従来どおり
+//   - 打っている途中の中間値は反映しない（矢印キー・スピナーだけが即反映。round1 P2）
 //   - 範囲外は最寄りの値へ丸めて通知する（#318「行き止まりは喋る」）
 //   - 外側で値が変わったとき（リセット等）は欄の表示も追従する（ドラッグとの双方向同期）
 //
@@ -120,6 +121,23 @@ describe('レイアウトタブの数値入力（Issue #578）', () => {
     fireEvent.blur(sideMargin);
     expect(sideMargin.value).toBe('25');
     expect(notices.some(m => m.includes('余白(左右)を数値として読み取れなかった'))).toBe(true);
+
+    // --- 受入4-b: 打っている途中の中間値は譜面にも保存にも当たらない（round1 P2） ---
+    // 「-60」は途中に「-6」という範囲内の整数を含む。以前はこれが即反映され、
+    // そのつど全ページの再配置と localStorage への保存が走っていた
+    const systemRowGap = input('段の間隔');
+    fireEvent.change(systemRowGap, { target: { value: '-' } });
+    fireEvent.change(systemRowGap, { target: { value: '-6' } });
+    expect(localStorageMock.getItem('score-system-row-gap')).toBeNull();
+    fireEvent.change(systemRowGap, { target: { value: '-60' } });
+    expect(localStorageMock.getItem('score-system-row-gap')).toBeNull();
+    // フォーカスを外した確定で、はじめて1つの値（-60）が保存される
+    fireEvent.blur(systemRowGap);
+    expect(localStorageMock.getItem('score-system-row-gap')).toBe('-60');
+
+    // スピナー（▲▼）と矢印キーは「打っている途中」が無いので即反映のまま
+    fireEvent.keyDown(systemRowGap, { key: 'ArrowUp' });
+    expect(localStorageMock.getItem('score-system-row-gap')).toBe('-59');
 
     // --- 受入5: 外側で値が変わったら欄の表示も追従する（ドラッグとの双方向同期） ---
     // ここでは「レイアウトをリセット」で外側から既定値へ戻す

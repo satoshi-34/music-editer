@@ -90,7 +90,15 @@ describe('パート間隔の数値入力（Issue #90）', () => {
     render(<ScorePage />);
     openLayoutTab();
 
+    // Issue #578 round1 P2 以降、キーボードで打った値が反映されるのは
+
+    // Enter・フォーカスを外したときの確定だけ（打っている途中の中間値は譜面に当てない）。
+
+    // そのため、打ったあとに blur を足して「欄から離れた」ところまで再現する。
+
     fireEvent.change(getPartSpacingInput(), { target: { value: '15' } });
+
+    fireEvent.blur(getPartSpacingInput());
     expect(getPartSpacingInput().value).toBe('15');
     expect(localStorageMock.getItem('score-part-spacing-offset')).toBe('15');
   });
@@ -108,6 +116,7 @@ describe('パート間隔の数値入力（Issue #90）', () => {
     const { unmount } = render(<ScorePage />);
     openLayoutTab();
     fireEvent.change(getPartSpacingInput(), { target: { value: '-10' } });
+    fireEvent.blur(getPartSpacingInput());
     unmount();
     cleanup();
 
@@ -121,6 +130,8 @@ describe('パート間隔の数値入力（Issue #90）', () => {
     openLayoutTab();
 
     fireEvent.change(getPartSpacingInput(), { target: { value: '20' } });
+
+    fireEvent.blur(getPartSpacingInput());
     expect(getPartSpacingInput().value).toBe('20');
 
     openResetMenu();
@@ -134,6 +145,8 @@ describe('パート間隔の数値入力（Issue #90）', () => {
     openLayoutTab();
 
     fireEvent.change(getPartSpacingInput(), { target: { value: '8' } });
+
+    fireEvent.blur(getPartSpacingInput());
     openResetMenu();
     fireEvent.click(screen.getByRole('button', { name: '既定として保存' }));
 

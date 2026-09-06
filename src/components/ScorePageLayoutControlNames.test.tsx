@@ -89,7 +89,11 @@ describe('レイアウトタブのコントロールのアクセシブルな名�
 
     // 値を変えても名前は「余白(左右)」のまま（値や単位が名前へ混ざらないこと）
     const sideMargin = screen.getByLabelText('余白(左右)') as HTMLInputElement;
+    // Issue #578 round1 P2 以降、キーボードで打った値が反映されるのは
+    // Enter・フォーカスを外したときの確定だけ（打っている途中の中間値は譜面に当てない）。
+    // そのため、打ったあとに blur を足して「欄から離れた」ところまで再現する。
     fireEvent.change(sideMargin, { target: { value: '18' } });
+    fireEvent.blur(sideMargin);
     expect(sideMargin.value).toBe('18');
     expect(screen.getByLabelText('余白(左右)')).toBe(sideMargin);
   }, MOUNT_HEAVY_TIMEOUT_MS);

@@ -85,12 +85,17 @@ describe('レイアウトタブの3グループ化とリセットメニュー（
     openLayoutTab();
 
     const sideMargin = screen.getByRole('spinbutton', { name: /余白\(左右\)/ }) as HTMLInputElement;
+    // Issue #578 round1 P2 以降、キーボードで打った値が反映されるのは
+    // Enter・フォーカスを外したときの確定だけ（打っている途中の中間値は譜面に当てない）。
+    // そのため、打ったあとに blur を足して「欄から離れた」ところまで再現する。
     fireEvent.change(sideMargin, { target: { value: '18' } });
+    fireEvent.blur(sideMargin);
     expect(sideMargin.value).toBe('18');
     expect(localStorageMock.getItem('score-page-margin-side')).toBe('18');
 
     const titleBottom = screen.getByRole('spinbutton', { name: /タイトル余白\(下\)/ }) as HTMLInputElement;
     fireEvent.change(titleBottom, { target: { value: '9' } });
+    fireEvent.blur(titleBottom);
     expect(titleBottom.value).toBe('9');
     expect(localStorageMock.getItem('score-title-margin-bottom')).toBe('9');
   }, MOUNT_HEAVY_TIMEOUT_MS);
@@ -152,6 +157,7 @@ describe('レイアウトタブの3グループ化とリセットメニュー（
 
     const sideMargin = screen.getByRole('spinbutton', { name: /余白\(左右\)/ }) as HTMLInputElement;
     fireEvent.change(sideMargin, { target: { value: '25' } });
+    fireEvent.blur(sideMargin);
     expect(sideMargin.value).toBe('25');
 
     openResetMenu();
