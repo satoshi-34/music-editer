@@ -48,6 +48,8 @@ import { handleVoice2NoteClick } from '../editor/handlers/voice2Click';
 import { articulationNoteClick, customSymbolNoteClick, dynamicNoteClick } from '../editor/handlers/noteClick/symbolAttach';
 import { ornamentNoteClick, ottavaNoteClick, pedalNoteClick } from '../editor/handlers/noteClick/symbolToggle';
 import { customSymbolOffsetNoteClick, customSymbolResizeNoteClick, symbolAdjustNoteClick } from '../editor/handlers/noteClick/symbolAdjust';
+import { crossStaffToggleNoteClick, graceNoteNoteClick, tupletNumberToggleNoteClick } from '../editor/handlers/noteClick/scoreToggle';
+import { textElementNoteClick } from '../editor/handlers/noteClick/textElement';
 import type { NoteTarget, NoteUiWriter, NoteWriter } from '../editor/handlers/noteClick/types';
 import { getInputAccidental, getInputMicrotone } from '../editor/inputAccidental';
 import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY, estimatePedalBottomExtensionPx, PEDAL_TEXT_DESCENT_PX } from '../utils/pedalBridgeUtils';
@@ -61,8 +63,6 @@ import {
   describeActiveVoiceSwitched,
   describeVoiceSwitchUnavailable,
   requestActivePartChange,
-  describeCrossStaffToggled,
-  describeCrossStaffUnavailable,
   describeMidMeasureClefUnavailable,
   describeDeletedArc,
   describeDeletedHairpin,
@@ -72,9 +72,7 @@ import {
   describePickupCleared,
   describePickupOverflow,
   describePickupSet,
-  describeSymbolToolUnavailable,
   describeTupletGroupPasteUnavailable,
-  describeTupletNumberToggleUnavailable,
   notifyScoreEdit,
   describeDoubleAccidentalKeySignatureUnavailable,
   describeMicrotoneKeySignatureUnavailable,
@@ -143,7 +141,7 @@ import {
   resolveClefAtMeasureEnd,
 } from '../utils/clefMeasureUtils';
 import { logEditOp, logRenderPass } from '../utils/editDebugLog';
-import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, availableRenderStaffDirection, toggleRenderStaffAt, asRenderedPartIndex, type RenderedPartIndex } from '../utils/crossStaffUtils';
+import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, asRenderedPartIndex, type RenderedPartIndex } from '../utils/crossStaffUtils';
 import { generateCrossStaffBeams, restoreCrossStaffBeamAssignments } from '../utils/crossStaffBeamUtils';
 import {
   CHORD_HIT_PAD,
@@ -208,7 +206,6 @@ import {
   instantiateTupletGroup,
   planTupletGroupPasteIntoRest,
   planTupletReplacementForRest,
-  toggleTupletNumberVisibility,
   tupletGroupBeats,
   type TupletKind,
 } from '../utils/tupletUtils';
@@ -6798,11 +6795,11 @@ export default function PianoSystemCanvas({
               const isOnNote=lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
               // モード別ハンドラ（editor/handlers/noteClick・#695 段6b-4）へ渡す対象と書き込み口。
               // 中身は上のローカルそのもの（束ねても挙動は変わらない）
-              const noteTarget: NoteTarget = { pi, absI, j, hitPi, hitVoice, activeEvs, clickedIsRest, part, clientX: me.clientX, clientY: me.clientY };
-              const noteWriter: NoteWriter = { updateHitEvent, setSelected, playNoteEvent };
+              const noteTarget: NoteTarget = { pi, absI, j, hitPi, hitVoice, activeEvs, clickedIsRest, part, parts, clientX: me.clientX, clientY: me.clientY };
+              const noteWriter: NoteWriter = { updateHitEvent, setSelected, playNoteEvent, setHitScore };
               // UI（調整オーバーレイ）を開く書き込み口（段6b-4c）。譜面を書く noteWriter と分けて渡す
               const noteUiWriter: NoteUiWriter = {
-                setSymbolResizeEditState, setSymbolOffsetEditState, setSymbolAdjustPickerState, openSymbolAdjustEditor,
+                setSymbolResizeEditState, setSymbolOffsetEditState, setSymbolAdjustPickerState, setTextEditState, openSymbolAdjustEditor,
                 findSymbolAnchorRect, anchorFromClientPoint, containerRef, customSymbolDefs,
               };
               /**
@@ -6920,72 +6917,10 @@ export default function PianoSystemCanvas({
                 return accidentalApplyOutcome() ?? { kind: 'passThrough' };
               }
               switch (tool.mode) {
-              case 'tupletNumberToggle': {
-                // 連符ではない音符を押しても何も起きないため、理由と代替手順を伝える
-                // （Issue #318「行き止まりは喋る」）。判定を setScore の updater の外で
-                // 行うのは、updater が2回呼ばれる場面（StrictMode など）で通知が
-                // 二重に出るのを避けるため（#238 の設計メモと同じ理由）。
-                // rejected にしないのは、通知した後も選択移動（下の setSelected）を行う
-                // 現行挙動を保存するため（rejected は「通知して終わり」の終端専用）。
-                if (!toggleTupletNumberVisibility(activeEvs, j)) {
-                  notifyScoreEdit(describeTupletNumberToggleUnavailable());
-                }
-                // 連符数字（3 等）の表示/非表示をグループ単位で切り替える（Issue #269）。
-                // 連符内休符をクリックしても同じグループが切り替わるよう、休符も対象に含める
-                // （グループの中に休符が残ったままの譜面でも「数字の近く」を押せば効く）。
-                setHitScore(prev=>{
-                  const next=prev.map(cloneMeasureData);
-                  if(absI>=next.length)return prev;
-                  const currentEvents=getVoiceEvents(next[absI], hitVoice);
-                  const toggled=toggleTupletNumberVisibility(currentEvents, j);
-                  // 連符ではない位置なら score を書き換えない。
-                  // ここで withVoiceEventsUpdated を呼ぶと、声部2モードのときに
-                  // 中身の無い voices[1] が生まれてしまう（#112 の教訓）。
-                  if(!toggled)return prev;
-                  next[absI]=withVoiceEventsUpdated(next[absI], hitVoice, ()=>toggled);
-                  return next;
-                });
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
-                return { kind: 'handled' };
-              }
-              case 'crossStaffToggle': {
-                // 段またぎ表示（Issue #310）: クリックした音符の描き先を self ↔ 隣の五線で切り替える。
-                // 向きはパートで決まる（右手＝下へ、左手＝上へ）ので、ユーザーは
-                // 「モードを選んで音符を押す」だけでよい（#294 の連符数字トグルと同じ操作感）。
-                const direction = availableRenderStaffDirection(hitPi, parts.length);
-                const clickedEv = activeEvs[j];
-                // 対象外のクリックを黙って捨てない（Issue #318。発端は #315 で、
-                // 回避手順を口頭で伝えないと使えない行き止まりになっていた）。
-                // 判定を setScore の updater の外に置くのは、updater が2回呼ばれる場面で
-                // 通知が二重に出るのを避けるため（#238 の設計メモと同じ理由）。
-                if (direction === null) {
-                  return { kind: 'rejected', notice: describeCrossStaffUnavailable('singleStaff') };
-                }
-                if (!clickedEv || clickedEv.isRest) {
-                  return { kind: 'rejected', notice: describeCrossStaffUnavailable('rest') };
-                }
-                // 「どちらへ移すのか」は書き換える前の値から決める（切替後の値では逆になる）
-                const turnedOn = clickedEv.renderStaff !== direction;
-                setHitScore(prev=>{
-                  const next=prev.map(cloneMeasureData);
-                  if(absI>=next.length)return prev;
-                  const currentEvents=getVoiceEvents(next[absI], hitVoice);
-                  const toggled=toggleRenderStaffAt(currentEvents, j, direction);
-                  // 対象外（休符・単段編成・範囲外）のときは score を書き換えない。
-                  // ここで withVoiceEventsUpdated を呼ぶと、声部2モードのときに
-                  // 中身の無い voices[1] が生まれてしまう（#112 の教訓）。
-                  if(!toggled)return prev;
-                  next[absI]=withVoiceEventsUpdated(next[absI], hitVoice, ()=>toggled);
-                  return next;
-                });
-                // 表示先の五線と「所属（どのパート・声部の音か）」は別物である。
-                // 取り違えたまま声部2が空だと思い込むと #322 の症状を踏むため、
-                // 移したことと「所属は変わらない」ことを必ず伝える（運用者の追加提案2）。
-                // 成功の報告なので rejected ではなく handled 内の通知（rejected は失敗の終端専用）。
-                notifyScoreEdit(describeCrossStaffToggled(direction, turnedOn, hitVoice));
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
-                return { kind: 'handled' };
-              }
+              case 'tupletNumberToggle':
+                return tupletNumberToggleNoteClick(noteTarget, noteWriter);
+              case 'crossStaffToggle':
+                return crossStaffToggleNoteClick(noteTarget, noteWriter);
               case 'dynamic':
                 return dynamicNoteClick(noteTarget, noteWriter, tool);
               case 'articulation':
@@ -6999,67 +6934,16 @@ export default function PianoSystemCanvas({
               case 'symbolAdjustResize':
               case 'symbolAdjustOffset':
                 return symbolAdjustNoteClick(noteTarget, noteUiWriter, tool);
-              case 'graceNote': {
-                // 前打音×休符は旧実装どおり既定処理へ（休符の選択/挿入になる）
-                if (clickedIsRest) return { kind: 'passThrough' };
-                // 前打音をトグルで付け外しする
-                updateHitEvent(j, (targetEv) => {
-                  if(targetEv.isRest)return null;
-                  const hasGrace=(targetEv.graceNotes?.length??0)>0;
-                  // 前打音のデフォルト音高は主音符の1音上（stepUp 関数は StaffCanvas と同じロジック）
-                  const graceKey=targetEv.keys[0]??'b/4';
-                  const noteNames=['c','d','e','f','g','a','b'];
-                  const m=graceKey.match(/^([a-g])(?:##|bb|[#b])?\/(\d+)$/i);
-                  const nextKey=m
-                    ? (()=>{
-                        const idx=noteNames.indexOf(m[1].toLowerCase());
-                        return idx===noteNames.length-1
-                          ? `c/${parseInt(m[2],10)+1}`
-                          : `${noteNames[idx+1]}/${m[2]}`;
-                      })()
-                    : graceKey;
-                  return hasGrace
-                    ?{...targetEv,graceNotes:undefined}
-                    :{...targetEv,graceNotes:[{keys:[nextKey],slash:true}]};
-                });
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
-                return { kind: 'handled' };
-              }
+              case 'graceNote':
+                return graceNoteNoteClick(noteTarget, noteWriter);
               case 'ornament':
                 return ornamentNoteClick(noteTarget, noteWriter, tool);
               case 'pedal':
                 return pedalNoteClick(noteTarget, noteWriter, tool);
               case 'ottava':
                 return ottavaNoteClick(noteTarget, noteWriter, tool);
-              case 'textElement': {
-                // テキストも休符に付く。プレースホルダーだけ既定処理へ（ペダルと同じ理由）
-                if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return { kind: 'passThrough' };
-                const textElementMode = tool.textKind;
-                // 運指だけは休符に描画されない（符頭の上に出す記号のため）。保存はできてしまうので
-                // 入力欄を開く前に断る。開かせると「入力したのに何も出ない」無言の行き止まりになる
-                // （#318・#398 round7 P2）。他のテキスト系（歌詞・コード記号・テンポ表記・発想標語）は
-                // 休符でも描画されるので従来どおり受け付ける。
-                if (textElementMode === 'fingering' && clickedIsRest) {
-                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
-                    { type: 'fingering' }, 'rest') };
-                }
-                // テキスト要素はクリック位置にオーバーレイを表示して文字入力を受け付ける。
-                // TextElementKind で NoteEvent を索引するため any キャストを使う
-                const currentText = (activeEvs[j] as any)[textElementMode] ?? '';
-                const containerRect = containerRef.current?.getBoundingClientRect();
-                setTextEditState({
-                  kind: textElementMode,
-                  partIndex: hitPi,
-                  measureAbsoluteIndex: absI,
-                  eventIndex: j,
-                  voiceIndex: hitVoice,
-                  currentValue: currentText,
-                  overlayX: me.clientX - (containerRect?.left ?? 0),
-                  overlayY: me.clientY - (containerRect?.top ?? 0),
-                });
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
-                return { kind: 'handled' };
-              }
+              case 'textElement':
+                return textElementNoteClick(noteTarget, noteWriter, noteUiWriter, tool);
               default:
                 // 音価ツール・休符ツールなど、フラグ系ではないツールは既定処理へ
                 return { kind: 'passThrough' };

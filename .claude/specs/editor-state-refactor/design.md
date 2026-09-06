@@ -875,6 +875,22 @@ updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setText
   通知（rejected 経路）、f を付けた音符では「サイズ変更（25〜400%、空欄で等倍）」のオーバーレイが値 100 で開くこと
   （対象 1 つ → openSymbolAdjustEditor 経路）を DOM で確認。Escape で閉じて元に戻すで復元（グリフ 0・無効）。譜面は未変更
 
+### 段6b-4d: フラグ系の残り 4 モード（tupletNumberToggle / crossStaffToggle / graceNote / textElement）を handlers/noteClick へ（2026-09-06）
+
+- `src/editor/handlers/noteClick/scoreToggle.ts` … `tupletNumberToggleNoteClick / crossStaffToggleNoteClick / graceNoteNoteClick`
+  （譜面を書くトグル 3 つ。NoteWriter を受ける。`tool` を読まないので引数から外した＝noUnusedParameters）
+- `src/editor/handlers/noteClick/textElement.ts` … `textElementNoteClick`（入力オーバーレイを開く。NoteWriter と NoteUiWriter の両方を
+  受ける＝選択は移すがオーバーレイも開く、と署名で分かる）
+- 束に足したもの: `NoteTarget.parts`（段またぎの向きは編成＝パート数で決まる。本文が `parts.length` を読む）、
+  `NoteWriter.setHitScore`（解決済み帰属の小節列を updater で書き換える）、`NoteUiWriter.setTextEditState`
+- `(activeEvs[j] as any)[textElementMode]` の as any は本文のまま移動（lint:ratchet 不変）
+- これで `flagToolOutcome` の switch は **全 case が 1 行の呼び出し**になった。残りは臨時記号付与（accidentalApplyOutcome）と
+  既定処理（noteDefaultOutcome / restDefaultOutcome）で、こちらは幾何（lx / ly / isOnNote / chordTopY …）と
+  挿入・和音追加の書き込み口（doInsert / setScoreFor など）が要るので、6b-4e で NoteTarget に幾何を足してから移す
+- 検証: 本文の機械比較 IDENTICAL（4 モード）、tsc -b、フルテスト、lint:ratchet 基準値、独立レビュー、ブラウザで
+  前打音ツールで m1 の 4 音目を押し、システム SVG の要素数が 588→600（前打音の描画分）に増えて元に戻すが有効になること、
+  元に戻すで 588 に戻ることを DOM で確認。譜面は未変更
+
 ### 段6b-2 の先行分割: 巡回判定の依存方向整理（2026-09-06）
 
 - PR #698 の後続として、純粋判定 `clickCycleUtils.ts` と単体テストを components から
