@@ -860,7 +860,11 @@ function restorePrimaryFromBackup(backupRaw: string, primaryKey: string): void {
  */
 function createStorageError(error: unknown): StorageError {
   if (error instanceof DOMException) {
-    if (error.name === 'QuotaExceededError') {
+    // 容量超過の判定は isQuotaExceededError に一本化する（Issue #641）。
+    // ここだけ error.name === 'QuotaExceededError' で見ていたため、Firefox の
+    // NS_ERROR_DOM_QUOTA_REACHED や古い Safari の code 22 が「原因不明の失敗」に落ち、
+    // 満杯時の自動整理・再試行へ入れなかった
+    if (isQuotaExceededError(error)) {
       return {
         type: StorageErrorType.QUOTA_EXCEEDED,
         message: STORAGE_FULL_MESSAGE,
@@ -1407,6 +1411,40 @@ export const WORK_HISTORY_MAX_GENERATIONS = 5;
  * 世代化せず読み飛ばす（直前1世代の -backup は従来どおり毎回退避される）
  */
 export const WORK_HISTORY_MIN_INTERVAL_MS = 10 * 60 * 1000;
+/**
+ * localStorage の使用量を「文字数」から見積もるときの1文字あたりのバイト数。
+ * ブラウザは文字列を UTF-16（1文字=2バイト）で数えて容量の上限に当てるため、
+ * 表示・上限判定はどちらもこの換算でそろえる（Chrome の上限 10MB ＝ 約 500 万文字）
+ */
+export const STORAGE_BYTES_PER_CHAR = 2;
+/**
+ * 1作品の復元履歴に使ってよい容量の上限（Issue #641 仕様1）。
+ * 世代数（WORK_HISTORY_MAX_GENERATIONS）と**両方**を満たすまで古い世代から捨てる。
+ * 世代数だけでは、1世代が 1MB を超える大きな作品（運用者の実測: 本体 1.2MB の作品）を
+ * 止められず、履歴だけで 2.3MB を使って保存領域 10MB を使い切っていた
+ */
+export const WORK_HISTORY_MAX_BYTES = 1024 * 1024;
+
+/**
+ * 世代の配列を上限（世代数・容量）まで新しい順に切り詰める。
+ * 容量は「JSON にしたときの文字数 × 2バイト」で見積もる（STORAGE_BYTES_PER_CHAR）。
+ *
+ * **最新の1世代だけは容量の上限を超えていても必ず残す**（round1 P1・運用者裁定）。
+ * 空にできるようにしていたときは、「この時点に戻す」がいまの内容を退避したつもりで
+ * 何も残さないまま古い世代で上書きしてしまい、戻す前の内容がどこにも残らなかった
+ * （実測: 履歴に小さな世代 A、いまの内容 B = 1.32MB のとき、B が消えた）。
+ * 1世代が 1MB を超える作品では上限の超過を許す＝**意図した逸脱**で、Issue #641 に記録している。
+ * 履歴に残せる世代が1つでもあれば「戻す前へ戻る」道は保てる、という優先順位である
+ */
+function limitWorkHistory(generations: WorkHistoryGeneration[]): WorkHistoryGeneration[] {
+  let limited = generations.slice(0, WORK_HISTORY_MAX_GENERATIONS);
+  // 1世代になるまでしか落とさない（length > 1 が条件）。最新1世代は容量超過でも残す
+  while (limited.length > 1
+    && JSON.stringify(limited).length * STORAGE_BYTES_PER_CHAR > WORK_HISTORY_MAX_BYTES) {
+    limited = limited.slice(0, limited.length - 1);
+  }
+  return limited;
+}
 
 /**
  * 作品の復元履歴を新しい順で返す。壊れた世代（構造検証・チェックサムに落ちるもの）は黙って除く。
@@ -1440,6 +1478,8 @@ export function loadWorkHistory(workId: string): WorkHistoryGeneration[] {
  * 「この時点に戻す」の直前退避は force=true で必ず積む）。
  * 容量あふれのときは古い世代を1つずつ落としながら書けるまで縮めて再試行し
  * （最後は新しい1世代だけでも残す）、それでも書けなければ失敗を返す。
+ * 失敗を返すのは大切で、「この時点に戻す」はこの結果を見て復元を中止する（退避できないまま
+ * 古い世代で上書きしないため）。
  */
 export function pushWorkHistoryGeneration(
   workId: string,
@@ -1470,8 +1510,12 @@ export function pushWorkHistoryGeneration(
     checksum: generateChecksum(JSON.stringify(sanitizedData)),
     data: sanitizedData,
   };
-  let next: WorkHistoryGeneration[] = [newGeneration, ...history].slice(0, WORK_HISTORY_MAX_GENERATIONS);
   const key = getWorkStorageKeys(workId).history;
+  // 世代数と容量の両方で打ち切る（#641 仕様1）
+  // 積む世代は必ず1つ以上残る（limitWorkHistory は最新1世代を落とさない）。
+  // 大きな作品で「履歴を空にして成功を返す」ことはしない: 復元（restoreWorkHistoryGeneration）は
+  // この成功を「いまの内容を退避できた」と受け取るため、空にすると退避なしの上書きになる（round1 P1）
+  let next: WorkHistoryGeneration[] = limitWorkHistory([newGeneration, ...history]);
   // 容量不足なら、古い世代を1つずつ落としながら新しい世代だけでも残るまで縮めて再試行する
   while (next.length > 0) {
     try {
@@ -1482,6 +1526,54 @@ export function pushWorkHistoryGeneration(
     }
   }
   return { success: false, error: { type: StorageErrorType.QUOTA_EXCEEDED, message: '復元履歴を保存する空き容量がありません', recoverable: true } };
+}
+
+/**
+ * すでに保存されている履歴を、いまの上限（世代数・容量）まで整理する（Issue #641 仕様1・6）。
+ * 上限を導入する前に積まれた巨大な履歴は、次に世代を積むまで縮まないため、
+ * 起動時の整理（enforceStorageBudget）から全作品ぶん呼ぶ。
+ * 戻り値は「実際に書き換えたか」。
+ */
+export function trimWorkHistoryToLimits(workId: string): boolean {
+  if (!isValidWorkId(workId) || typeof localStorage === 'undefined') return false;
+  const key = getWorkStorageKeys(workId).history;
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return false;
+    // 上限内の履歴は JSON を解析せずに素通りさせる（起動のたびに全作品ぶん解析しないため）。
+    // 世代数の上限は積むときに必ず効いているので、ここで見るのは容量だけでよい
+    if (raw.length * STORAGE_BYTES_PER_CHAR <= WORK_HISTORY_MAX_BYTES) return false;
+    const limited = limitWorkHistory(loadWorkHistory(workId));
+    if (limited.length === 0) {
+      // 世代がすべて壊れていた場合（loadWorkHistory が全部落とした）だけここへ来る
+      localStorage.removeItem(key);
+      return true;
+    }
+    const nextRaw = JSON.stringify(limited);
+    // 1世代で上限を超える作品はここで縮められない（最新1世代は残す）。
+    // 同じ内容を書き戻すと「整理した」と嘘の報告になるので、変わったときだけ書く
+    if (nextRaw === raw) return false;
+    localStorage.setItem(key, nextRaw);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 作品の復元履歴だけを手放す（自動保存の本体・カタログの登録は残す）。
+ * 保存領域が予算を超えたときの自動整理（#641 仕様2）で、古い作品から順に呼ぶ。
+ */
+export function clearWorkHistory(workId: string): boolean {
+  if (!isValidWorkId(workId) || typeof localStorage === 'undefined') return false;
+  try {
+    const key = getWorkStorageKeys(workId).history;
+    if (localStorage.getItem(key) === null) return false;
+    localStorage.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

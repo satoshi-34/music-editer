@@ -20,7 +20,18 @@ import {
   setLastOpenedWorkId,
   type WorkHistoryGeneration
 } from '../utils/storage';
-import type { SavedScoreData, WorkSummary } from '../types/storage';
+import {
+  buildStorageCleanupMessage,
+  dropOldestWorkHistory,
+  enforceStorageBudget,
+} from '../utils/storageBudget';
+import { StorageErrorType, type SavedScoreData, type WorkSummary } from '../types/storage';
+
+/**
+ * 満杯で保存できなかったときに「古い履歴を1件手放して保存し直す」を繰り返す上限。
+ * 履歴を持つ作品の数だけ試せば十分だが、万一の無限ループを避けて回数でも止める
+ */
+const STORAGE_CLEANUP_MAX_RETRIES = 20;
 
 /**
  * 作品切替の結果（#500 round1 P1）。呼び出し側の正しい挙動がそれぞれ違う:
@@ -40,6 +51,13 @@ export interface UseWorkLibraryReturn {
   currentWorkId: string | null;
   /** 保存・削除の失敗をユーザーへ伝えるための文言（成功時は null） */
   workError: string | null;
+  /**
+   * 保存領域が足りずに古い復元履歴を自動で整理したことを伝える文言（Issue #641 仕様2）。
+   * 表示した側が clearStorageCleanupNotice() で消す（同じ知らせを出し続けないため）
+   */
+  storageCleanupNotice: string | null;
+  /** storageCleanupNotice を表示し終えたときに呼ぶ */
+  clearStorageCleanupNotice: () => void;
   /** カタログを読み直して一覧を最新にする（一覧を開くときに呼ぶ） */
   refreshWorks: () => void;
   /**
@@ -73,6 +91,8 @@ export function useWorkLibrary(): UseWorkLibraryReturn {
   const [works, setWorks] = useState<WorkSummary[]>([]);
   const [currentWorkId, setCurrentWorkIdState] = useState<string | null>(null);
   const [workError, setWorkError] = useState<string | null>(null);
+  const [storageCleanupNotice, setStorageCleanupNotice] = useState<string | null>(null);
+  const clearStorageCleanupNotice = useCallback(() => setStorageCleanupNotice(null), []);
 
   // 自動保存はデバウンス（1.5秒待ってから保存）されるため、保存処理が動く時点の
   // 「いま開いている作品ID」を state 経由で読むと、切替直後に1つ前の値を読んでしまう
@@ -94,6 +114,11 @@ export function useWorkLibrary(): UseWorkLibraryReturn {
     // どちらの移行も旧キーを消さないので、途中で失敗しても譜面は残る。
     migrateLegacyDataToAutosave();
     migrateLegacyDataToWorks();
+
+    // 保存領域を予算の中へ収めてから始める（Issue #641 仕様1・2）。
+    // 移行の直後に置くのは、旧データの取り込みで一気に増えることがあるため。
+    // ここで整理しておかないと、最初の自動保存が満杯で失敗して「黙って保存されない」状態から始まる
+    setStorageCleanupNotice(buildStorageCleanupMessage(enforceStorageBudget()));
 
     const available = listWorks();
     setWorks(available);
@@ -132,7 +157,24 @@ export function useWorkLibrary(): UseWorkLibraryReturn {
       setCurrentWorkId(workId);
     }
 
-    const result = saveWorkAutosaveData(workId, data);
+    let result = saveWorkAutosaveData(workId, data);
+    if (!result.success && result.error?.type === StorageErrorType.QUOTA_EXCEEDED) {
+      // 満杯で書けなかった（Issue #641 仕様2・3）。ここで諦めると自動保存が黙って止まるので、
+      // 古い作品の復元履歴を1件ずつ手放しては保存し直す。手放せるものが無くなったら諦めて
+      // 失敗を返す（呼び出し側が「保存できませんでした」を出す）
+      const clearedWorkIds: string[] = [];
+      for (let retry = 0; retry < STORAGE_CLEANUP_MAX_RETRIES && !result.success; retry += 1) {
+        const freed = dropOldestWorkHistory();
+        if (freed.clearedWorkIds.length === 0) break;
+        clearedWorkIds.push(...freed.clearedWorkIds);
+        result = saveWorkAutosaveData(workId, data);
+      }
+      if (clearedWorkIds.length > 0) {
+        setStorageCleanupNotice(buildStorageCleanupMessage({
+          trimmedWorkIds: [], clearedWorkIds, freedBytes: 0, usedBytes: 0,
+        }));
+      }
+    }
     if (!result.success) {
       // いま発行したばかりの作品IDなら取り消す（Codex #109 第4段 round2）。
       // 残すと「中身の無い空作品」がカタログに増え、currentWorkId も
@@ -248,6 +290,8 @@ export function useWorkLibrary(): UseWorkLibraryReturn {
     works,
     currentWorkId,
     workError,
+    storageCleanupNotice,
+    clearStorageCleanupNotice,
     refreshWorks,
     initializeWorks,
     saveCurrentWork,
