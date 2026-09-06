@@ -627,3 +627,66 @@ setter・ref は引数で受けるだけなので、React の state 遷移は 1 
 
 次（段6b）: Pass 3 の中のクリックハンドラ群（`ir.addEventListener` 6905〜、符頭の `hit.addEventListener` 7310〜）を
 `src/editor/handlers/` へ。閉包の setter は「コンテキスト」1 オブジェクトで渡す。段6a と同じ手順（AST で自由変数を列挙 → Deps → 分割代入）。
+
+## 17. 段6b の設計（2026-09-06・運用者裁定「設計してから移す。人が読みやすくするためにやる」）
+
+### 現状の実測（段6a 後）
+| ハンドラ | 位置 | 行数 | 閉包から参照する変数 |
+| --- | --- | --- | --- |
+| 符頭のクリック（`hit.addEventListener('click')`） | 7130〜7873 | 744 | 54（+モジュール関数 45） |
+| 小節背景のクリック（`ir.addEventListener('click')`） | 6626〜6740 | 115 | 36 |
+| 声部2の当たり判定のクリック（`rect.addEventListener('click')`） | 6874〜6892 | 19 | 24 |
+| 符頭の mousedown / mouseup（タイのドラッグ開始・巡回） | 7082〜7128 | 45 | — |
+| 拍範囲スライスのドラッグ（`el.addEventListener('mousedown')`） | 6374〜6394 | 21 | — |
+
+54 変数を平らに渡す「機械的な移設」は行数を減らすだけで読みやすくならない（レビュー・運用者裁定）。
+先に**文脈 3 つ**へ畳み、ハンドラは「文脈＋対象」を受ける純粋寄りの関数にする。
+
+### 文脈（Deps を畳む単位）
+段6a の Deps（16 項目・19 項目）と上の 54 変数の重なりから、自然な単位は次の 3 つ:
+```ts
+// src/editor/types.ts（段6b-1 で新設。純データ型の置き場）
+export interface SelectionContext {          // 「いま何が選ばれているか」と、その setter
+  selected: Sel; selectedArc: SelectedArcSel; selectedHairpin: SelectedHairpinSel;
+  setSelected; setSelectedArc; setSelectedHairpin;
+}
+export interface ClickCycleApi {             // 再クリック巡回（#264）の 5 関数。PianoSystemCanvas 4555〜4616 に並んでいるもの
+  registerClickCycleTarget; prepareClickCycle; tryClickCycle; armClickCycleFor; commitClickCycle;
+}
+export interface LayerContext {              // 編集レイヤー（#316/#417）
+  activeLayerPartIndex: number | undefined; activeVoiceIndex: number; activeLayerHighlightPartIndex: number | null;
+}
+```
+残る変数は「対象」（どの小節・どの音符か: `pi / absI / j / activeEvs / stave / clefHere …`）と
+「ツール」（`tool` と、そこから導いた `isSelectTool` など）と「書き込み口」（`setScoreFor / doInsert / updateActiveEvent`）。
+これらは**ハンドラごとの引数**として明示する（文脈に混ぜない。混ぜると「どのハンドラが何を書くか」が見えなくなる）。
+
+### ハンドラの形
+```ts
+// src/editor/handlers/noteClick.ts
+export function handleNoteClick(
+  ctx: { selection: SelectionContext; cycle: ClickCycleApi; layer: LayerContext; svg: SvgContext },
+  target: NoteTarget,                 // pi / absI / j / activeEvs / stave / clefHere / hit 要素 / 幾何（noteVisualLeft …）
+  tool: Tool,
+  writer: NoteWriter,                 // setScoreFor / updateActiveEvent / doInsert / playNoteEvent
+  e: MouseEvent,
+): NoteClickOutcome
+```
+符頭クリックの 744 行は「ツールのモード分岐」の連鎖なので、モードごとに `handlers/noteClick/<mode>.ts`
+（accidental / articulation / ornament / dynamic / arc / crossStaff / tuplet / symbolAdjust / textElement / select …）へ割り、
+`noteClick.ts` は hitResolution の分岐表（段3c）から各モード関数を呼ぶだけの薄い入口にする。
+既存の `NoteClickOutcome`（handled / rejected+notice）はそのまま戻り値に使う（#318「行き止まりは喋る」の契約を保つ）。
+
+### 段割り（各段 1 PR・挙動ゼロ差・フルテストと REGRESSION が安全網）
+| 段 | 内容 | ゼロ差の根拠 |
+| --- | --- | --- |
+| 6b-1 | `src/editor/types.ts` を新設し、純データ型（Sel / SelectedArcSel / SelectedHairpinSel / ClickCycleTarget / ArcGeom / ArcIdentityP / NotePositionP / DragSessions / PendingClickCycle）を寄せる。renderPipeline の import 先を types へ | 型の移動のみ・tsc |
+| 6b-2 | 文脈 3 つの型を types.ts に置き、PianoSystemCanvas の描画 effect 冒頭で 3 つのオブジェクトを 1 回だけ作る。段6a の Deps（SpanRendererDeps / SystemSpansDeps）を文脈で書き直す（呼び出し側の引数が 16→7、19→9 に減る） | 本文無変更・引数の束ね直しのみ |
+| 6b-3 | 小節背景クリック（115 行）と声部2クリック（19 行）を `handlers/measureClick.ts` / `handlers/voice2Click.ts` へ。対象・ツール・書き込み口を引数化 | 本文無変更・AST で自由変数を列挙 |
+| 6b-4〜 | 符頭クリック（744 行）をモードごとに割って移す。1 PR で 2〜3 モード | 各モードの分岐は既に `NoteClickOutcome` を返す独立した塊 |
+| 6b-末 | 符頭の mousedown/mouseup・拍範囲ドラッグ → 段6c（dragSessions）へ引き継ぎ | — |
+
+### 進め方の約束（段6a と同じ）
+- 自由変数は `scratchpad/free-ids.cjs`（TypeScript AST）で列挙してから引数を決める
+- 各 PR: tsc・フルテスト・lint:ratchet 基準値・独立レビュー 1 本（型だけの段）〜2 本（ハンドラを動かす段）
+- 段6b-3 以降は `PianoSystemCanvas` を触る ai-ready（#645 #653 #657 #693 ほか）を一時的に外す
