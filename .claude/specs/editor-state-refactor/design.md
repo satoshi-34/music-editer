@@ -1008,3 +1008,62 @@ updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setText
 - ブラウザ: 実 Canvas の検証譜面で重なったスラーを3回クリックし、選択端点の DOM 属性が
   a1 → a0 → a1 と切り替わることと表示を確認。コンソールエラーなし。画像は
   `docs/qa/evidence/click-cycle-policy-selection.png` に保存。検証用ページは削除済み。
+
+## 18. 段7 の設計案（ScorePage の分割・2026-09-07・**運用者の裁定待ち**）
+
+### 段6 の結果（前提）
+PianoSystemCanvas は 10,087 → 7,828 行（段6a〜6c-2、PR #696〜#714 と 6c-2）。クリック（`editor/handlers/`）とドラッグ（`editor/dragSessions/`）の
+リスナ本文は Canvas の外に揃い、Canvas に残るのは描画 effect の本体（Pass 1〜3）、state と reducer、当たり判定の生成、
+`applyArc / applyHairpin / doInsert / handleMeasureScopedTool` などの書き込み口である。
+
+### ScorePage の実測（2026-09-07・`scripts/free-ids.cjs`）
+8,706 行。`useState` 90 個・`useRef` 58 個・`useCallback / useEffect / useMemo` 207 個。JSX は 6,760 行目から末尾（約 1,950 行）。
+
+| 塊 | 位置 | 行数 | 自由変数（component-local / import） | 何をするか |
+| --- | --- | --- | --- | --- |
+| `handlePlay` | 1819〜2327 | 508 | 39 / 36 | 再生の開始（エンジン選択・健康診断・位置追従） |
+| キーボードの effect | 4210〜4713 | 503 | 31 / 27 | ショートカット（コピー・貼り付け・削除・移調・選択移動・音価キー） |
+| `requestExportFileName` | 3194〜3425 | 232 | 70 / 24 | 書き出しのファイル名確認と保存 |
+| `applyImportedMusicXmlBytes` | 6085〜6262 | 178 | 33 / 25 | MusicXML の取り込み |
+| `renderSystemPanel` | 5809〜5956 | 148 | 22 / 11 | 段ごとの調整パネルの描画 |
+| `runOutputHealthCheck` | 1436〜1543 | 108 | 12 / 12 | 音の出力の自己診断（#666） |
+| `handleRestoreWorkHistory` | 3869〜3951 | 83 | 20 / 6 | 作品履歴からの復元 |
+| `applyLoadedScoreData` | 3462〜3539 | 78 | 31 / 17 | 読込データを state へ展開 |
+| `resetScoreStateToEmpty` | 3077〜3150 | 74 | 39 / 6 | 新規作成（state を空へ） |
+| `buildCurrentScoreData` | 5957〜6020 | 64 | 19 / 5 | state から保存データを組む |
+| JSX: ヘッダとタブ行・レイヤー選択 | 6812〜7064 | 253 | 43 / 7 | タブ・Undo/Redo・レイヤーチップ・音符パレット |
+| JSX: 楽譜設定タブ | 7065〜7260 | 196 | 32 / 12 | 種類・編成・拍子・調号・パート表示・題字 |
+| JSX: レイアウトタブ | 7261〜7670 | 410 | 47 / 25 | 用紙・余白・密度・段組・ツールバー位置 |
+| JSX: ファイルタブ | 7671〜7916 | 246 | 83 / 5 | 保存・開く・書き出し・作品一覧・リセット |
+| JSX: 譜面本体とオーバーレイ | 7917〜8700 | 784 | 134 / 19 | Canvas 呼び出し・再生コントロール・各種ダイアログ |
+
+### 分け方の原則（段6 と同じ）
+- 「変更する理由が同じ処理」を単位にし、**state の所有者は ScorePage に残す**（読込・保存・再生は譜面 state 全体を読む。所有権を動かすと
+  段6 の「挙動ゼロ差」が成り立たない）。関数は「文脈＋対象＋書き込み口」の束で受ける
+- 平らに 30〜80 個の引数を渡す移設はしない（§17 の裁定）。束の設計をこの節で先に決め、各段の PR は本文ゼロ差の物理移設に徹する
+- JSX の切り出しはコンポーネント化＝props 束になるので、束の設計ができた領域から
+
+### 単位の案（§17 目標形の `src/components/scorePage/` を 4 つに割る）
+| 単位 | 入るもの | 束の候補 | 難しさ |
+| --- | --- | --- | --- |
+| 7-1 キーボード | 4210〜4713 の effect | `ScoreKeyContext`（isPrintPreview・選択・クリップボード・ツール）＋書き込み口（setTool / 選択移動 / 削除 / 貼り付け） | 低〜中。6b-3 と同じ形（effect の本文を関数にし deps を渡す） |
+| 7-2 題字（タイトル編集） | title / subtitle / lyricist / composer / arranger と titleFont* の state（8 個）とその入力 UI（楽譜設定タブの一部） | **state ごと** `useTitleEditor()` へ移せる候補（読み手が印刷ヘッダと保存データの 2 か所だけなら）。要調査: 読み手の列挙 | 低（読み手が少なければ） |
+| 7-3 読込・保存 | applyLoadedScoreData / resetScoreStateToEmpty / buildCurrentScoreData / handleRestoreWorkHistory / applyImportedMusicXmlBytes / requestExportFileName | `ScoreStateReader`（各 state の現在値）と `ScoreStateWriter`（各 setter）の 2 束。requestExportFileName は 70 変数なので、先に「ファイル名の確認」と「保存の実行」に割る | 中。束が大きいが「読む／書く」で機械的に分かれる |
+| 7-4 再生 | handlePlay / runOutputHealthCheck と playbackState / currentPosition / currentInstrument / soundRuntimeSettings / activeSoundEngineMode / isTemporaryBuiltInFallback / audioHealthNotice* | `usePlaybackController()` として **state ごと**移す候補（再生 state の読み手は再生コントロールと Canvas の位置表示）。要調査: 読み手の列挙 | 中〜高。エンジン生成と健康診断が絡む |
+| 7-5 タブ JSX | 楽譜設定（32）・レイアウト（47）・ファイル（83） | 7-2〜7-4 の束が決まると props が減る。ファイルタブは 7-3 の後 | 束次第 |
+
+### 段割り（各段 1 PR・挙動ゼロ差・フルテストと REGRESSION が安全網）
+| 段 | 内容 | ゼロ差の根拠 |
+| --- | --- | --- |
+| 7-0 | 7-2 と 7-4 の「state の読み手」を列挙して、state ごと移せるか裁定する（この節の表を更新） | 調査のみ |
+| 7-1 | キーボードの effect を `src/components/scorePage/keyboardShortcuts.ts` へ（6b-3 の形） | 本文無変更・AST で自由変数を列挙 |
+| 7-2 | 題字の state と UI を `scorePage/titleEditor/`（hook＋コンポーネント）へ | 読み手が 2 か所なら state 移動も可。REGRESSION の印刷ヘッダ項目 |
+| 7-3 | 読込・保存 6 関数を `scorePage/persistence.ts` へ（Reader / Writer の 2 束） | 本文無変更 |
+| 7-4 | 再生を `scorePage/playback/`（hook） | 7-0 の裁定次第 |
+| 7-5 | タブ JSX を `scorePage/tabs/` のコンポーネントへ（楽譜設定 → レイアウト → ファイル） | props 束は 7-2〜7-4 の束を再利用 |
+
+### 裁定してほしいこと（朝）
+1. 7-2 / 7-4 で **state の所有権を動かしてよいか**（動かすなら「挙動ゼロ差」の根拠はテストと REGRESSION になる。動かさないなら束が大きくなる）
+2. 着手順: 7-1（最も機械的）→ 7-3 → 7-5 の順でよいか。7-2 / 7-4 は 7-0 の調査結果を見てから
+3. Codex 試験（9/7 19:20 以降）を 7-1 に当てるか
+
