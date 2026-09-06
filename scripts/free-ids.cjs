@@ -1,6 +1,6 @@
 // 指定した行範囲（例: 符頭クリックのハンドラ本体）が、その外側で宣言された識別子を
 // いくつ参照しているかを TypeScript の AST で列挙する（#695 段6b の「自由変数」計測）。
-// 使い方: node scratchpad/free-ids.cjs src/components/PianoSystemCanvas.tsx <開始行> <終了行>
+// 使い方: node scripts/free-ids.cjs src/components/PianoSystemCanvas.tsx <開始行> <終了行>
 // 出力: 名前 / 宣言の場所（component-local = コンポーネント関数内のローカル、module = モジュール
 // スコープ、import = 他ファイル）/ 参照回数。JSON でも出す（--json）。
 const ts = require('typescript');
