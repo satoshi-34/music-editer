@@ -839,6 +839,24 @@ updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setText
   ペダル記号（Ped）ツールで m1 の 3 音目を押し、ペダル要素が 0→1・選択がその音符に移る・元に戻すが有効になることを DOM で
   確認し、元に戻すで復元（0・無効）。譜面は変更していない（ブラウザペイン非表示のため DOM 確認のみ・画像なし）
 
+### 段6b-4c-prep: 編集ローカル状態の型を editor/types.ts へ（2026-09-06）
+
+- PianoSystemCanvas の**関数の内側**に宣言されていた型 `AdjustTarget` と `OverlayStates / OverlayKind / OverlayUnion /
+  SelectionSlot / SelectionPayloads / SelectionUnion / EditorLocalState / EditorLocalAction`（144 行）を `src/editor/types.ts` へ
+  移し export した。Canvas は `import type` で受ける。中身・コメントは不変（型の移動のみ・tsc）
+- 理由: 次の 6b-4c（customSymbolResize / customSymbolOffset / symbolAdjust* = 調整オーバーレイを**開く**モード）が
+  `setSymbolResizeEditState` 等の setter を書き込み口として受けるが、その引数型が関数内の型だったため
+  editor/handlers から参照できなかった。段6b-1（純データ型の移設）と同じ扱い
+- `editor/types.ts` の依存が増える: `TextElementKind`（utils/textElementUtils）・`OverlayRectLike`
+  （utils/symbolOverlayPlacementUtils）・`AdjustableSymbolKind`（types/storage）。いずれも型のみ
+- 独立レビューで **Canvas 側の import 追加が効いていなかった**（置換の対象行が段6b-4a で変わっていた）のを捕捉。
+  ローカルの型検査に使っていた `tsc --noEmit -p .` はルート tsconfig（`files: []`）のため何も検査しておらず、
+  これまでの段は CI の build（`tsc -b`）で担保されていた。以後の型検査は `tsc -b` に統一（DEVELOPMENT.md に明記）
+- reducer の見出しコメント（#244 段2a）は reducer 本体と一緒に Canvas へ残し、types.ts には型の見出しだけを置いた
+- 検証: tsc -b・フルテスト（403/404。残り 1 件 ScorePagePlaybackEndCleanup は時間依存で、単独実行 2 回は通過）・
+  lint:ratchet 基準値・独立レビュー。ブラウザ: 譜面の再描画（音符 974 個）と Shift+クリックの小節選択が従来どおり、
+  コンソールエラー無し、譜面は未変更
+
 ### 段6b-2 の先行分割: 巡回判定の依存方向整理（2026-09-06）
 
 - PR #698 の後続として、純粋判定 `clickCycleUtils.ts` と単体テストを components から

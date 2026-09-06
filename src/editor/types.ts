@@ -10,6 +10,9 @@ import type { ClefType } from '../components/clefUtils';
 // RenderCollectors（描画台帳の塊）は段6c で LedgerContext の内側へ移すまで PianoSystemCanvas に置く。
 // ここでは型だけを借りる（実行時の依存は無い。systemSpans.ts と同じ扱い）
 import type { RenderCollectors } from '../components/PianoSystemCanvas';
+import type { AdjustableSymbolKind } from '../types/storage';
+import type { TextElementKind } from '../utils/textElementUtils';
+import type { OverlayRectLike } from '../utils/symbolOverlayPlacementUtils';
 
 // ── 選択 ─────────────────────────────────────────────────
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
@@ -129,7 +132,6 @@ export type DragSessions = {
   symbolOffsetMoved: boolean;
 };
 
-
 // ── 文脈（#695 段6b-2）─────────────────────────────────────
 // 描画 effect のローカルを「変更する理由が同じもの」ごとに束ねた型。描画関数・ハンドラは
 // 平らな十数個の引数ではなく、この束と「対象」（どの小節・どの音符か）を受ける。
@@ -185,3 +187,135 @@ export interface ClickCycleApi {
   tryClickCycle: (selfId: string, clientX: number, clientY: number) => boolean;
   armClickCycleFor: (selfId: string, clientX: number, clientY: number) => void;
 }
+
+// ── 編集ローカル状態（選択・オーバーレイ）の型（#695 段6b-4c-prep で PianoSystemCanvas の関数内から移設。中身は不変）──
+// サイズ・位置調整の対象1件。カスタム記号（symbolId で識別）と
+// 標準記号（kind で識別。fingering/dynamics など）の両方を同じ形で扱えるようにする（StaffCanvas と同じ考え方）。
+export type AdjustTarget =
+  | { type: 'custom'; symbolId: string; name: string }
+  | { type: 'standard'; kind: AdjustableSymbolKind };
+
+export type OverlayStates = {
+  timeSig: {
+  measureAbsoluteIndex: number;
+  currentValue: string;
+  overlayX: number;
+  overlayY: number;
+  } | null;
+  /** 弱起（アウフタクト＝不完全小節）の設定オーバーレイ（Issue #473） */
+  pickup: {
+  measureAbsoluteIndex: number;
+  currentValue: string;
+  overlayX: number;
+  overlayY: number;
+  } | null;
+  keySig: {
+  measureAbsoluteIndex: number;
+  currentValue: string;
+  overlayX: number;
+  overlayY: number;
+  } | null;
+  clef: {
+  measureAbsoluteIndex: number;
+  partIndex: number;
+  /**
+   * 小節途中のクレフ変更（Issue #424）で「この音から変える」対象にした音符の位置。
+   * 音符をクリックしたときだけ入り、小節の背景をクリックしたとき（従来の小節単位の
+   * 変更）は undefined。確定処理はこの有無だけで書き込み先を切り替える。
+   */
+  eventIndex?: number;
+  currentValue: string;
+  overlayX: number;
+  overlayY: number;
+  } | null;
+  bpm: {
+  measureAbsoluteIndex: number;
+  currentValue: string;
+  overlayX: number;
+  overlayY: number;
+  } | null;
+  /** 自由注釈テキスト（Issue #421）。文字・サイズ・位置を1枚のオーバーレイで扱う */
+  freeText: {
+  measureAbsoluteIndex: number;
+  partIndex: number;
+  currentText: string;
+  currentScalePercent: string;
+  currentOffsetX: string;
+  currentOffsetY: string;
+  /** 書体の id（Issue #432）。既定は DEFAULT_TITLE_FONT_ID */
+  currentFontId: string;
+  overlayX: number;
+  overlayY: number;
+  } | null;
+  rehearsal: {
+  measureAbsoluteIndex: number;
+  currentValue: string;
+  overlayX: number;
+  overlayY: number;
+  } | null;
+  text: {
+  kind: TextElementKind;
+  partIndex: number;
+  measureAbsoluteIndex: number;
+  eventIndex: number;
+  voiceIndex: number;
+  currentValue: string;
+  overlayX: number;
+  overlayY: number;
+  } | null;
+  symbolResize: {
+  partIndex: number;
+  measureAbsoluteIndex: number;
+  eventIndex: number;
+  voiceIndex: number;
+  target: AdjustTarget;
+  currentValue: string;
+  anchor: OverlayRectLike;
+  } | null;
+  symbolOffset: {
+  partIndex: number;
+  measureAbsoluteIndex: number;
+  eventIndex: number;
+  voiceIndex: number;
+  target: AdjustTarget;
+  currentX: string;
+  currentY: string;
+  draftX: number;
+  draftY: number;
+  // 調整対象の記号の実描画範囲（Issue #230。symbolResizeEditState の anchor と同じ意味）
+  anchor: OverlayRectLike;
+  } | null;
+  symbolPicker: {
+  partIndex: number;
+  measureAbsoluteIndex: number;
+  eventIndex: number;
+  voiceIndex: number;
+  kind: 'resize' | 'offset';
+  options: AdjustTarget[];
+  overlayX: number;
+  overlayY: number;
+  } | null;
+};
+export type OverlayKind = keyof OverlayStates;
+export type OverlayUnion = { [K in OverlayKind]: { kind: K; payload: NonNullable<OverlayStates[K]> } }[OverlayKind];
+export type SelectionSlot = 'note' | 'arc' | 'hairpin';
+export type SelectionPayloads = {
+  note: NonNullable<Sel>;
+  arc: NonNullable<SelectedArcSel>;
+  hairpin: NonNullable<SelectedHairpinSel>;
+};
+export type SelectionUnion = { [K in SelectionSlot]: { kind: K; payload: SelectionPayloads[K] } }[SelectionSlot];
+export type EditorLocalState = { selection: SelectionUnion | null; overlay: OverlayUnion | null };
+// value は各 slot/kind ごとに型が違うため action 上は unknown で運び、
+// 型安全は同名ラッパー（従来の setter と同じシグネチャ）で担保する
+export type EditorLocalAction =
+  | { type: 'SELECTION_SET'; slot: SelectionSlot; value: unknown }
+  | { type: 'OVERLAY_SET'; kind: OverlayKind; value: unknown }
+  // ツール切替: オーバーレイを全種キャンセル（差分表#1）。選択は #238 の既存仕様
+  //（ScorePage からの CLEAR 要求）に任せるためここでは触らない
+  | { type: 'TOOL_CHANGED' }
+  // タブ切替・ツール変更・再生開始の掃除要求（SCORE_SELECTION_CLEAR_EVENT）:
+  // 従来の選択解除に加えてオーバーレイも閉じる（差分表#4）
+  | { type: 'CLEAR_ALL' }
+  // 他の段が選択を取った（SELECTION_CLAIMED_EVENT）: 自段の選択だけ手放す
+  | { type: 'SELECTION_CLAIMED_BY_OTHER' };

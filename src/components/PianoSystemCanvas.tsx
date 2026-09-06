@@ -185,7 +185,7 @@ import {
 } from '../utils/symbolAdjustUtils';
 import SymbolAdjustOverlay from './SymbolAdjustOverlay';
 import type { OverlayRectLike } from '../utils/symbolOverlayPlacementUtils';
-import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
+import { applyTextElementToEvent, textElementLabel, textElementPlaceholder } from '../utils/textElementUtils';
 import { TEMPO_MARKING_PRESETS, TEMPO_MARKING_DATALIST_ID } from '../utils/tempoMarkingPresets';
 import { drawLyricsEntry } from '../utils/lyricsRenderUtils';
 import {
@@ -288,6 +288,7 @@ import type {
   LayerContext,
   LedgerContext,
   SvgContext,
+  AdjustTarget, OverlayStates, OverlayKind, OverlayUnion, SelectionSlot, SelectionPayloads, SelectionUnion, EditorLocalState, EditorLocalAction,
 } from '../editor/types';
 
 /* ===== 型 ===== */
@@ -2620,12 +2621,6 @@ export default function PianoSystemCanvas({
   const partsClefRef = useRef(parts.map(p => p.clef));
   // 選択中のスラー/タイ（null = 未選択）
 
-  // サイズ・位置調整の対象1件。カスタム記号（symbolId で識別）と
-  // 標準記号（kind で識別。fingering/dynamics など）の両方を同じ形で扱えるようにする（StaffCanvas と同じ考え方）。
-  type AdjustTarget =
-    | { type: 'custom'; symbolId: string; name: string }
-    | { type: 'standard'; kind: AdjustableSymbolKind };
-
   /** 記号のクリック判定 rect（.symbol-hit-region）へ付ける「どの記号か」の目印を1本の文字列にする */
   const symbolHitRegionKey = (target: AdjustTarget): string =>
     target.type === 'custom' ? `custom:${target.symbolId}` : `standard:${target.kind}`;
@@ -2685,111 +2680,11 @@ export default function PianoSystemCanvas({
   };
 
   // ── オーバーレイ状態の集約（#244 段1b）──
+  // （OverlayStates などの型は #695 段6b-4c-prep で src/editor/types.ts へ移した。ここには reducer と setter だけが残る）
   // 9個の独立 useState を1つの record へ機械的に集約した。**排他化はしない**（union 化と
   // ライフサイクル統一は段2）。既存の呼び出し箇所を書き換えないため、従来と同名の
   // setter ラッパー（updater 形式も可）と読み取り用の別名を置く。各フィールドの遷移は
   // 従来の個別 setState と同一なので挙動はゼロ差。
-  type OverlayStates = {
-    timeSig: {
-    measureAbsoluteIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-    } | null;
-    /** 弱起（アウフタクト＝不完全小節）の設定オーバーレイ（Issue #473） */
-    pickup: {
-    measureAbsoluteIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-    } | null;
-    keySig: {
-    measureAbsoluteIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-    } | null;
-    clef: {
-    measureAbsoluteIndex: number;
-    partIndex: number;
-    /**
-     * 小節途中のクレフ変更（Issue #424）で「この音から変える」対象にした音符の位置。
-     * 音符をクリックしたときだけ入り、小節の背景をクリックしたとき（従来の小節単位の
-     * 変更）は undefined。確定処理はこの有無だけで書き込み先を切り替える。
-     */
-    eventIndex?: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-    } | null;
-    bpm: {
-    measureAbsoluteIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-    } | null;
-    /** 自由注釈テキスト（Issue #421）。文字・サイズ・位置を1枚のオーバーレイで扱う */
-    freeText: {
-    measureAbsoluteIndex: number;
-    partIndex: number;
-    currentText: string;
-    currentScalePercent: string;
-    currentOffsetX: string;
-    currentOffsetY: string;
-    /** 書体の id（Issue #432）。既定は DEFAULT_TITLE_FONT_ID */
-    currentFontId: string;
-    overlayX: number;
-    overlayY: number;
-    } | null;
-    rehearsal: {
-    measureAbsoluteIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-    } | null;
-    text: {
-    kind: TextElementKind;
-    partIndex: number;
-    measureAbsoluteIndex: number;
-    eventIndex: number;
-    voiceIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-    } | null;
-    symbolResize: {
-    partIndex: number;
-    measureAbsoluteIndex: number;
-    eventIndex: number;
-    voiceIndex: number;
-    target: AdjustTarget;
-    currentValue: string;
-    anchor: OverlayRectLike;
-    } | null;
-    symbolOffset: {
-    partIndex: number;
-    measureAbsoluteIndex: number;
-    eventIndex: number;
-    voiceIndex: number;
-    target: AdjustTarget;
-    currentX: string;
-    currentY: string;
-    draftX: number;
-    draftY: number;
-    // 調整対象の記号の実描画範囲（Issue #230。symbolResizeEditState の anchor と同じ意味）
-    anchor: OverlayRectLike;
-    } | null;
-    symbolPicker: {
-    partIndex: number;
-    measureAbsoluteIndex: number;
-    eventIndex: number;
-    voiceIndex: number;
-    kind: 'resize' | 'offset';
-    options: AdjustTarget[];
-    overlayX: number;
-    overlayY: number;
-    } | null;
-  };
   // ── 編集ローカル状態の reducer（#244 段2a）──
   // 段1で record に集約した「選択」と「オーバーレイ」を、1つの reducer + 排他 union へ
   // 置き換える（運用者承認済みの差分表 #2/#5）。
@@ -2804,29 +2699,6 @@ export default function PianoSystemCanvas({
   // - setter ラッパーは従来と同名・同シグネチャ。null set は「その種類が開いて/選ばれて
   //   いるときだけ閉じる」（別種が開いているときの null set は従来どおり no-op）。
   //   同値 bailout（段1の教訓）は reducer が prev を返すことで維持する
-  type OverlayKind = keyof OverlayStates;
-  type OverlayUnion = { [K in OverlayKind]: { kind: K; payload: NonNullable<OverlayStates[K]> } }[OverlayKind];
-  type SelectionSlot = 'note' | 'arc' | 'hairpin';
-  type SelectionPayloads = {
-    note: NonNullable<Sel>;
-    arc: NonNullable<SelectedArcSel>;
-    hairpin: NonNullable<SelectedHairpinSel>;
-  };
-  type SelectionUnion = { [K in SelectionSlot]: { kind: K; payload: SelectionPayloads[K] } }[SelectionSlot];
-  type EditorLocalState = { selection: SelectionUnion | null; overlay: OverlayUnion | null };
-  // value は各 slot/kind ごとに型が違うため action 上は unknown で運び、
-  // 型安全は同名ラッパー（従来の setter と同じシグネチャ）で担保する
-  type EditorLocalAction =
-    | { type: 'SELECTION_SET'; slot: SelectionSlot; value: unknown }
-    | { type: 'OVERLAY_SET'; kind: OverlayKind; value: unknown }
-    // ツール切替: オーバーレイを全種キャンセル（差分表#1）。選択は #238 の既存仕様
-    //（ScorePage からの CLEAR 要求）に任せるためここでは触らない
-    | { type: 'TOOL_CHANGED' }
-    // タブ切替・ツール変更・再生開始の掃除要求（SCORE_SELECTION_CLEAR_EVENT）:
-    // 従来の選択解除に加えてオーバーレイも閉じる（差分表#4）
-    | { type: 'CLEAR_ALL' }
-    // 他の段が選択を取った（SELECTION_CLAIMED_EVENT）: 自段の選択だけ手放す
-    | { type: 'SELECTION_CLAIMED_BY_OTHER' };
   const editorLocalReducer = (state: EditorLocalState, action: EditorLocalAction): EditorLocalState => {
     switch (action.type) {
       case 'SELECTION_SET': {
