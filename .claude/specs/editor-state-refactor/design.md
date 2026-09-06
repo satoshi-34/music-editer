@@ -857,6 +857,24 @@ updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setText
   lint:ratchet 基準値・独立レビュー。ブラウザ: 譜面の再描画（音符 974 個）と Shift+クリックの小節選択が従来どおり、
   コンソールエラー無し、譜面は未変更
 
+### 段6b-4c: 「調整オーバーレイを開く」モード（customSymbolResize / customSymbolOffset / symbolAdjust*）を handlers/noteClick へ（2026-09-06）
+
+- `src/editor/handlers/noteClick/symbolAdjust.ts` … `customSymbolResizeNoteClick / customSymbolOffsetNoteClick / symbolAdjustNoteClick`
+  （本文 30 / 30 / 44 行、case 行と閉じ括弧を除く。symbolAdjustResize と symbolAdjustOffset は元から 1 つの case なので 1 関数）
+- **書き込み口を 2 束に分けた**（6b-2 の分類表で予告した案）: 譜面を書く `NoteWriter`（updateHitEvent / setSelected / playNoteEvent）と、
+  UI を開く `NoteUiWriter`（setSymbolResizeEditState / setSymbolOffsetEditState / setSymbolAdjustPickerState / openSymbolAdjustEditor /
+  findSymbolAnchorRect / anchorFromClientPoint / containerRef / customSymbolDefs）。モード関数の署名から「譜面を変えるのか、
+  オーバーレイを開くだけなのか」が読めるようにするため。3 関数とも NoteUiWriter しか受けない（＝譜面を書かない）
+- `NoteTarget` に `clientX / clientY` を追加（本文が `me.clientX` を読む。関数内で `const me = { clientX, clientY }` に束ね直して
+  本文を無変更にした）。必要になった段で足す約束どおり
+- setter の引数型は 6b-4c-prep で移した `OverlayStates['symbolResize']` 等を参照。`openSymbolAdjustEditor` の `event` は
+  `ClickableNoteEvent` で受ける（Canvas 側は狭い NoteEvent 型だが、引数の反変性で代入可。tsc -b で確認）
+- Canvas から移った import（listPresentAdjustableSymbolKinds）を掃除
+- 検証: 本文の機械比較 IDENTICAL（3 関数）、tsc -b、フルテスト、lint:ratchet 基準値、独立レビュー、ブラウザで
+  記号のサイズ変更ツールで符頭を押し、記号なしの音符では「記号がありません（記号を付けてから ⤢ / ✥ を使ってください）」の
+  通知（rejected 経路）、f を付けた音符では「サイズ変更（25〜400%、空欄で等倍）」のオーバーレイが値 100 で開くこと
+  （対象 1 つ → openSymbolAdjustEditor 経路）を DOM で確認。Escape で閉じて元に戻すで復元（グリフ 0・無効）。譜面は未変更
+
 ### 段6b-2 の先行分割: 巡回判定の依存方向整理（2026-09-06）
 
 - PR #698 の後続として、純粋判定 `clickCycleUtils.ts` と単体テストを components から
