@@ -856,6 +856,8 @@ README の「使い方」は取扱説明として残しつつ、そこに混じ�
 
 - 小節背景クリックは `src/editor/handlers/measureClick.ts`、他声部の符頭クリックは `src/editor/handlers/voice2Click.ts`。
   Canvas は `addEventListener` の中でこれらを 1 回呼ぶだけ。引数は「文脈（types.ts）・対象・ツール・書き込み口・drag」の順
+- 符頭クリックのモード別処理は `src/editor/handlers/noteClick/`（types.ts に対象・書き込み口の型、モードごとのファイルに本文）。
+  Canvas の switch は各 case で 1 回呼ぶだけ。新しいモードを移すときは NoteTarget に要る値だけを足す
 - 最小の自動確認: `npx vitest --run src/components/PianoSystemCanvasMeasureSelect.test.tsx src/components/PianoSystemCanvasTupletHideNumber.test.tsx src/components/PianoSystemCanvasClickCycle.test.tsx`
 - ブラウザ: 音価ツールで小節の空き部分をクリックして音符が入ること、小節選択ツール（または Shift+クリック）で
   小節が選ばれること、別声部の符頭クリックで声部が切り替わることを確認する

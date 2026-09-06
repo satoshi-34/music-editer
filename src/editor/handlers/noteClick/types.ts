@@ -1,0 +1,38 @@
+// src/editor/handlers/noteClick/types.ts
+// 符頭クリック（PianoSystemCanvas の 744 行のハンドラ）をモードごとに割って移すときの共通の引数型
+// （#695 段6b-4）。設計書 §17 の「文脈＋対象＋ツール＋書き込み口」のうち、対象と書き込み口をここに置く。
+// 値はすべて描画 effect のローカルそのもの（束ねても挙動は変わらない）。
+import type { NoteEvent } from '../../../types/storage';
+import type { InstrumentType } from '../../../audio/SoundSource';
+import type { PartConfig } from '../../../components/PianoSystemCanvas';
+import type { Sel } from '../../types';
+
+/** 描画時に声部へ束縛されたイベント列の要素。全休符プレースホルダーは __isPlaceholder が立つ */
+export type ClickableNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
+
+/** どの符頭を押したか（帯のパート・小節・イベント位置と、帰属を解決した書き込み先） */
+export interface NoteTarget {
+  /** クリックした帯のパート */
+  pi: number;
+  /** 楽章全体での小節番号 */
+  absI: number;
+  /** アクティブ声部のイベント列での位置 */
+  j: number;
+  /** resolveHitAttribution で解決した書き込み先のパート・声部 */
+  hitPi: number;
+  hitVoice: number;
+  /** アクティブ声部のイベント列（描画時のスナップショット） */
+  activeEvs: ClickableNoteEvent[];
+  /** 押したのが休符（全休符プレースホルダー含む）か */
+  clickedIsRest: boolean;
+  /** 帯のパート設定（再生楽器などを読む） */
+  part: PartConfig;
+}
+
+/** 譜面・選択・再生へ書き込む口（Canvas が持つ関数をそのまま渡す） */
+export interface NoteWriter {
+  /** 解決済み帰属（hitPi / hitVoice）で j 番目のイベントを書き換える */
+  updateHitEvent: (targetJ: number, compute: (targetEv: ClickableNoteEvent) => ClickableNoteEvent | null) => void;
+  setSelected: (value: React.SetStateAction<NonNullable<Sel> | null>) => void;
+  playNoteEvent: (noteEvent: NoteEvent, instrument?: InstrumentType) => void | Promise<void>;
+}

@@ -45,6 +45,8 @@ import type { ClickCycleState } from '../editor/clickCycleUtils';
 import { createClickCycle } from '../editor/clickCycle';
 import { handleMeasureBackgroundClick } from '../editor/handlers/measureClick';
 import { handleVoice2NoteClick } from '../editor/handlers/voice2Click';
+import { articulationNoteClick, customSymbolNoteClick, dynamicNoteClick } from '../editor/handlers/noteClick/symbolAttach';
+import type { NoteTarget, NoteWriter } from '../editor/handlers/noteClick/types';
 import { getInputAccidental, getInputMicrotone } from '../editor/inputAccidental';
 import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY, estimatePedalBottomExtensionPx, PEDAL_TEXT_DESCENT_PX } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
@@ -164,8 +166,7 @@ import {
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 // 自動休符補完は #244 段5-2 で utils へ物理移設（不変条件テストから直接呼ぶため）
 import { buildRestEventsForBeats, fillPriorMeasureRests } from '../utils/measureRestFillUtils';
-import { applyDynamicMarkingToEvent, formatDynamicMarking, dynamicGlyphMetricsFor, orderedDynamicMarkings, estimateDynamicMarkingsCollisionRect } from '../utils/dynamicMarkingUtils';
-import { toggleArticulationOnEvent } from '../utils/articulationMarkingUtils';
+import { formatDynamicMarking, dynamicGlyphMetricsFor, orderedDynamicMarkings, estimateDynamicMarkingsCollisionRect } from '../utils/dynamicMarkingUtils';
 import {
   applyCustomSymbolToEvent,
   setCustomSymbolScale,
@@ -6924,6 +6925,10 @@ export default function PianoSystemCanvas({
               // 和音追加・臨時記号・強弱・削除などの操作ができる。
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
               const isOnNote=lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
+              // モード別ハンドラ（editor/handlers/noteClick・#695 段6b-4）へ渡す対象と書き込み口。
+              // 中身は上のローカルそのもの（束ねても挙動は変わらない）
+              const noteTarget: NoteTarget = { pi, absI, j, hitPi, hitVoice, activeEvs, clickedIsRest, part };
+              const noteWriter: NoteWriter = { updateHitEvent, setSelected, playNoteEvent };
               /**
                * フラグ系ツール15モードのテーブル（#244 段3c）。
                * 各 case が「モード×対象種別（音符/休符/placeholder）」のセルに相当する。
@@ -7105,48 +7110,12 @@ export default function PianoSystemCanvas({
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
                 return { kind: 'handled' };
               }
-              case 'dynamic': {
-                // 記号系ツール×休符は音符専用のため通知して終える
-                // （旧実装では休符分岐の activeSymbolTool でまとめて通知していたセル。
-                //  Issue #330 / #318「行き止まりは喋る」）
-                if (clickedIsRest) {
-                  return { kind: 'rejected', notice: describeSymbolToolUnavailable({ type: 'dynamic' }, 'rest') };
-                }
-                const dynamicMode = tool.dynamic;
-                // 多段譜でも「この音符から強弱が始まる」と分かるよう、
-                // 音符セルクリックで直接 NoteEvent に強弱を付ける。
-                const nextEv = applyDynamicMarkingToEvent(activeEvs[j], dynamicMode);
-                updateHitEvent(j, (targetEv) => targetEv.isRest ? null : applyDynamicMarkingToEvent(targetEv, dynamicMode));
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
-                playNoteEvent(nextEv, part.playbackInstrument);
-                return { kind: 'handled' };
-              }
-              case 'articulation': {
-                // StaffCanvas 廃止（PSC 一本化）時の移植漏れの復旧（#279 のコード記号と同型）。
-                // 強弱記号と同じ形で、音符クリックでトグル付け外しする
-                if (clickedIsRest) {
-                  return { kind: 'rejected', notice: describeSymbolToolUnavailable({ type: 'articulation' }, 'rest') };
-                }
-                const articulationMode = tool.articulation;
-                const nextEv = toggleArticulationOnEvent(activeEvs[j], articulationMode);
-                updateHitEvent(j, (targetEv) => targetEv.isRest ? null : toggleArticulationOnEvent(targetEv, articulationMode));
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
-                playNoteEvent(nextEv, part.playbackInstrument);
-                return { kind: 'handled' };
-              }
-              case 'customSymbol': {
-                if (clickedIsRest) {
-                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
-                    { type: 'customSymbol', symbolName: customSymbolNameOf(tool.symbolId) }, 'rest') };
-                }
-                const customSymbolMode = tool.symbolId;
-                // カスタム記号も既存音符にトグルで付け外しする（StaffCanvas と同じ挙動）。
-                const nextEv = applyCustomSymbolToEvent(activeEvs[j], customSymbolMode);
-                updateHitEvent(j, (targetEv) => targetEv.isRest ? null : applyCustomSymbolToEvent(targetEv, customSymbolMode));
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
-                playNoteEvent(nextEv, part.playbackInstrument);
-                return { kind: 'handled' };
-              }
+              case 'dynamic':
+                return dynamicNoteClick(noteTarget, noteWriter, tool);
+              case 'articulation':
+                return articulationNoteClick(noteTarget, noteWriter, tool);
+              case 'customSymbol':
+                return customSymbolNoteClick(noteTarget, noteWriter, tool, customSymbolNameOf);
               case 'customSymbolResize': {
                 if (clickedIsRest) {
                   return { kind: 'rejected', notice: describeSymbolToolUnavailable(

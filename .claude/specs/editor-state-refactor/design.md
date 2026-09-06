@@ -803,6 +803,29 @@ updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setText
   の通知（移設した挿入経路と #318 の通知が動作）、Shift+クリック → 小節 3 が選択（移設した小節選択経路が動作）。
   コンソールエラー無し。画像は `docs/qa/evidence/handlers-6b3-measure-select.png`。譜面は変更していない
 
+### 段6b-4a: 符頭クリックの「記号を付ける」3 モードを handlers/noteClick へ（2026-09-06）
+
+- `src/editor/handlers/noteClick/types.ts` … `NoteTarget`（pi / absI / j / hitPi / hitVoice / activeEvs / clickedIsRest / part）と
+  `NoteWriter`（updateHitEvent / setSelected / playNoteEvent）。744 行のハンドラをモードごとに割るときの共通の引数型
+- `src/editor/handlers/noteClick/symbolAttach.ts` … `dynamicNoteClick / articulationNoteClick / customSymbolNoteClick`
+  （`case 'dynamic' / 'articulation' / 'customSymbol'` の本文 14 / 11 / 11 行（case 行と閉じ括弧を除く）を移設。同じ「休符なら通知 → 書き換え →
+  選択 → 再生」の形なので 1 ファイルに 3 つ）
+- Canvas 側は `isOnNote` の直後で `noteTarget / noteWriter` を 1 回だけ作り、switch の各 case は `return xxxNoteClick(...)`
+  の 1 行にした。`switch (tool.mode)` の中なので `tool` は各モードの型に絞られたまま渡る
+  （関数側は `Extract<Tool, { mode: 'dynamic' }>` で受ける）
+- `NoteTarget.part` の型 `PartConfig` を PianoSystemCanvas から `import type` するため、型グラフ上の循環が 1 本増える
+  （madge 10→11。実行時の循環は無し。PartConfig を移す段で解消）
+- `NoteWriter.updateHitEvent` の compute は `(targetEv: ClickableNoteEvent) => ClickableNoteEvent | null`。Canvas の
+  `updateActiveEvent` は `(targetEv: any) => any` だが、そのまま代入できる（any を新設すると lint:ratchet が増える）
+- 残りのモード（tupletNumberToggle / crossStaffToggle / customSymbolResize / customSymbolOffset / symbolAdjust* /
+  graceNote / ornament / pedal / ottava / textElement）と既定処理（noteDefaultOutcome / restDefaultOutcome）、
+  臨時記号付与（accidentalApplyOutcome）は次の PR から。NoteTarget には各モードが要る幾何（lx / ly / isOnNote /
+  noteVisualLeft …）を必要になった段で足す（先回りして積まない）
+- 検証: 本文の機械比較 IDENTICAL（3 モード）、tsc、フルテスト、lint:ratchet 基準値、独立レビュー、ブラウザで
+  強弱記号 f ツールで m1 の 2 音目を押し、f のグリフ（U+E522）が付く・選択がその音符に移る・「元に戻す」が有効になる
+  ことを DOM で確認し、元に戻すで譜面を復元（グリフ 0・元に戻す無効）。画像は `docs/qa/evidence/note-click-6b4a-dynamic.png`
+  （ブラウザペインが非表示だったため、描画された SVG を Bravura で再描画したもの）
+
 ### 段6b-2 の先行分割: 巡回判定の依存方向整理（2026-09-06）
 
 - PR #698 の後続として、純粋判定 `clickCycleUtils.ts` と単体テストを components から
