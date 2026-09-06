@@ -867,6 +867,8 @@ README の「使い方」は取扱説明として残しつつ、そこに混じ�
 - window で受けるドラッグ処理は `src/editor/dragSessions/`（windowSafety = 後始末の安全弁、arcDrag = 弧の端点・曲率、symbolOffsetDrag = 記号の移動）。
   どれも「useEffect の本文をそのまま関数にし、解除関数を返す」形で、Canvas は `useEffect(() => attachXxx(deps), [deps])` の 1 行で呼ぶ。
   弧が属する声部の中でイベントを書き換える `updateVoiceEventInMeasures` は `src/utils/voiceEventUpdate.ts`
+- 譜面側のドラッグリスナも同じ場所: svgTiePreview（svg の click 読み飛ばし・選択解除・タイ／松葉プレビュー）、measureSelectDrag（小節・拍範囲のドラッグ選択）、
+  noteArcDrag（符頭のタイ／松葉ドラッグの開始と確定）。Canvas は当たり判定を作った直後に `attachXxx(el, deps)` を呼ぶだけ
 - 最小の自動確認: `npx vitest --run src/components/PianoSystemCanvasMeasureSelect.test.tsx src/components/PianoSystemCanvasTupletHideNumber.test.tsx src/components/PianoSystemCanvasClickCycle.test.tsx`
 - ブラウザ: 音価ツールで小節の空き部分をクリックして音符が入ること、小節選択ツール（または Shift+クリック）で
   小節が選ばれること、別声部の符頭クリックで声部が切り替わることを確認する

@@ -35,6 +35,8 @@ docker exec -w /app music-editer-dev npm run lint:ratchet
 | 再生の音・タイミングがおかしい | `src/audio/ScorePlayer.ts` / `flattenMeasureForPlayback`（voiceMeasureUtils） | `swing-playback` ほか |
 | タイ・スラーの当たり判定・掴んだ瞬間・クリック巡回が変 | `src/editor/renderPipeline/spanRenderer.ts`（`drawArcPathP` の mousedown/mouseup）と `clickCycleUtils` | `click-target-cycling` / `voice2-arc-support` |
 | タイ・スラーのドラッグ中の追従・離したときの確定が変 | `src/editor/dragSessions/arcDrag.ts`（window の mousemove/mouseup）と PianoSystemCanvas の `updateArcDragPreview` / `cancelArcDrag`（`arcDragContextRef` で検索） | `click-target-cycle` ほか |
+| タイ・松葉を符頭から引き始められない・離しても付かない | `src/editor/dragSessions/noteArcDrag.ts`（符頭の mousedown/mouseup）と `svgTiePreview.ts`（破線プレビュー・背景での後始末）。書き込みは PianoSystemCanvas の `applyArc` / `applyHairpin` | `voice2-arc-support` |
+| 小節選択ツールのドラッグで範囲が広がらない・拍の途中で切れない | `src/editor/dragSessions/measureSelectDrag.ts`（mousedown/mouseenter/mousemove）。拍境界の候補は PianoSystemCanvas の `snappedBeatAtX` | `editor-state-refactor` §17 |
 | 松葉（ヘアピン）・弧の一括描画・段末のオッターバ括弧が変 | `src/editor/renderPipeline/systemSpans.ts` / `ottavaSystemEnd.ts`（#695 段6a で移設。中身は移設前と同じ） | `editor-state-refactor` §16 |
 
 ファイル内の検索は「段3c」「Pass 1」「#244」など**コメント内のキーワード**が目印になるよう書いてある。
