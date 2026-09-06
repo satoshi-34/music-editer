@@ -1428,12 +1428,18 @@ export const WORK_HISTORY_MAX_BYTES = 1024 * 1024;
 /**
  * 世代の配列を上限（世代数・容量）まで新しい順に切り詰める。
  * 容量は「JSON にしたときの文字数 × 2バイト」で見積もる（STORAGE_BYTES_PER_CHAR）。
- * 1世代だけで上限を超える大きな作品では**空になる**（＝その作品は履歴を持たない）。
- * 履歴が無くても自動保存の本体は別キーに残るので、編集中の内容は失われない
+ *
+ * **最新の1世代だけは容量の上限を超えていても必ず残す**（round1 P1・運用者裁定）。
+ * 空にできるようにしていたときは、「この時点に戻す」がいまの内容を退避したつもりで
+ * 何も残さないまま古い世代で上書きしてしまい、戻す前の内容がどこにも残らなかった
+ * （実測: 履歴に小さな世代 A、いまの内容 B = 1.32MB のとき、B が消えた）。
+ * 1世代が 1MB を超える作品では上限の超過を許す＝**意図した逸脱**で、Issue #641 に記録している。
+ * 履歴に残せる世代が1つでもあれば「戻す前へ戻る」道は保てる、という優先順位である
  */
 function limitWorkHistory(generations: WorkHistoryGeneration[]): WorkHistoryGeneration[] {
   let limited = generations.slice(0, WORK_HISTORY_MAX_GENERATIONS);
-  while (limited.length > 0
+  // 1世代になるまでしか落とさない（length > 1 が条件）。最新1世代は容量超過でも残す
+  while (limited.length > 1
     && JSON.stringify(limited).length * STORAGE_BYTES_PER_CHAR > WORK_HISTORY_MAX_BYTES) {
     limited = limited.slice(0, limited.length - 1);
   }
@@ -1472,6 +1478,8 @@ export function loadWorkHistory(workId: string): WorkHistoryGeneration[] {
  * 「この時点に戻す」の直前退避は force=true で必ず積む）。
  * 容量あふれのときは古い世代を1つずつ落としながら書けるまで縮めて再試行し
  * （最後は新しい1世代だけでも残す）、それでも書けなければ失敗を返す。
+ * 失敗を返すのは大切で、「この時点に戻す」はこの結果を見て復元を中止する（退避できないまま
+ * 古い世代で上書きしないため）。
  */
 export function pushWorkHistoryGeneration(
   workId: string,
@@ -1504,19 +1512,10 @@ export function pushWorkHistoryGeneration(
   };
   const key = getWorkStorageKeys(workId).history;
   // 世代数と容量の両方で打ち切る（#641 仕様1）
+  // 積む世代は必ず1つ以上残る（limitWorkHistory は最新1世代を落とさない）。
+  // 大きな作品で「履歴を空にして成功を返す」ことはしない: 復元（restoreWorkHistoryGeneration）は
+  // この成功を「いまの内容を退避できた」と受け取るため、空にすると退避なしの上書きになる（round1 P1）
   let next: WorkHistoryGeneration[] = limitWorkHistory([newGeneration, ...history]);
-  if (next.length === 0) {
-    // 新しい1世代だけで容量の上限を超える大きな作品。履歴は持てないので、
-    // 同じく上限を超えている既存の履歴を手放して保存領域を返す。
-    // ここでは通知しない: 自動保存のたびに出ることになり邪魔になるうえ、
-    // 本体（autosave スロット）の保存は成功していて実害が無いため（「行き止まりは喋る」の例外）
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      // 消せなくても編集は続けられるので握りつぶす
-    }
-    return { success: true, data: false };
-  }
   // 容量不足なら、古い世代を1つずつ落としながら新しい世代だけでも残るまで縮めて再試行する
   while (next.length > 0) {
     try {
@@ -1546,10 +1545,15 @@ export function trimWorkHistoryToLimits(workId: string): boolean {
     if (raw.length * STORAGE_BYTES_PER_CHAR <= WORK_HISTORY_MAX_BYTES) return false;
     const limited = limitWorkHistory(loadWorkHistory(workId));
     if (limited.length === 0) {
+      // 世代がすべて壊れていた場合（loadWorkHistory が全部落とした）だけここへ来る
       localStorage.removeItem(key);
       return true;
     }
-    localStorage.setItem(key, JSON.stringify(limited));
+    const nextRaw = JSON.stringify(limited);
+    // 1世代で上限を超える作品はここで縮められない（最新1世代は残す）。
+    // 同じ内容を書き戻すと「整理した」と嘘の報告になるので、変わったときだけ書く
+    if (nextRaw === raw) return false;
+    localStorage.setItem(key, nextRaw);
     return true;
   } catch {
     return false;

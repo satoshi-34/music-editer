@@ -729,3 +729,46 @@ Chrome の上限 10MB ちょうどに達し、自動保存が黙って止まっ�
 - テスト: `src/utils/storageBudget.test.ts`（上限・整理・通知の分岐）、
   `src/hooks/useWorkLibrary.test.ts`（満杯時の再試行）、
   `src/components/ScorePageStorageBudget.test.tsx`（実マウントの配線）
+
+### round1 レビューでの修正: 最新1世代は容量上限より優先して残す（P1・P2-1）
+
+**問題**: 容量の上限（1MB）を「どんなときも守る」実装にしていたため、1世代だけで 1MB を超える
+作品では `limitWorkHistory` が**空の配列**を返し、`pushWorkHistoryGeneration` は履歴キーを消して
+`success: true` を返していた。「この時点に戻す」（`restoreWorkHistoryGeneration`）は、この成功を
+**「いまの内容を退避できた」**と受け取って復元を続けるため、次のことが起きる。
+
+| 状態 | 結果 |
+| --- | --- |
+| 履歴に小さな世代 A、いまの内容 B = 1.32MB | 復元は成功扱い・履歴キーは削除・自動保存は A に戻り、**B はどこにも残らない** |
+
+運用者の実作品（本体 1.2MB）がちょうどこの経路に入る。
+「いまの内容は必ず1世代として残す。退避できなければ復元を中止する」という Codex round1 で
+固めた保証が、容量上限の導入で破れていた。
+
+**修正（運用者裁定 (a)）**: `limitWorkHistory` は**最新の1世代を必ず残す**（切り詰めの条件を
+`limited.length > 0` から `> 1` へ）。これに伴い `pushWorkHistoryGeneration` の
+「空になったら履歴キーを消して成功を返す」分岐は削除した。容量上限を超えても
+書き込みできなければ、これまでどおり `QUOTA_EXCEEDED` の**失敗**を返し、復元側が中止する。
+
+#### 意図した逸脱（Issue #641 へも記録）
+
+- **1世代が 1MB を超える作品では、履歴が `WORK_HISTORY_MAX_BYTES` を超える**。
+  「上限を必ず守る」よりも「戻す前へ戻れる」を優先した結果である。
+  この場合でも世代は常に1つだけなので、履歴の大きさは本体1つぶんに収まる
+- **`buildStorageCleanupMessage` は上限まで縮めただけの整理を黙って行う**という仕様6からの
+  逸脱は残すが、**500KB 以上空いたときは知らせる**ようにした（`STORAGE_TRIM_NOTICE_MIN_BYTES`）。
+  日常の掃除（数十KB）まで通知すると邪魔になる一方、起動時に何百KBも消えたことを黙っているのは
+  「勝手に減った」に見えるため
+
+**あわせて直したもの**: `trimWorkHistoryToLimits` は、縮められなかった（＝1世代で上限超え）ときに
+同じ内容を書き戻して「整理した」と報告していた。JSON 文字列が変わったときだけ書き込み、
+`false`（＝整理していない）を返すようにした。これが無いと起動時の整理の報告と通知が嘘になる。
+
+#### この修正での影響範囲
+
+- `src/utils/storage.ts`: `limitWorkHistory`（最新1世代を残す）・`pushWorkHistoryGeneration`
+  （空分岐の削除）・`trimWorkHistoryToLimits`（変化したときだけ書く）
+- `src/utils/storageBudget.ts`: `STORAGE_TRIM_NOTICE_MIN_BYTES` と、縮めただけのときの通知文
+- `src/utils/storageBudget.test.ts`: 大きな作品で最新1世代が残ること（P1）、次の世代を積んでも
+  履歴が全部消えないこと（P2-1）、大きな現在内容が復元前に退避されること（P1 の復元経路）、
+  通知の下限（P2-2）

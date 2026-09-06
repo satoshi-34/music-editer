@@ -156,11 +156,27 @@ export function enforceStorageBudget(options?: { budgetBytes?: number }): Storag
 }
 
 /**
+ * 上限まで縮めた整理を知らせる下限（round1 P2-2）。
+ * 日常の掃除（数十KB）は黙って済ませ、まとまった量を手放したときだけ知らせる
+ */
+export const STORAGE_TRIM_NOTICE_MIN_BYTES = 500 * 1024;
+
+/**
  * 整理したことを利用者へ伝える文言（仕様2「削ったことは通知で伝える」）。
- * 知らせるのは「履歴をまるごと手放した」ときだけにする。上限まで縮めただけの整理は
- * 毎回の保存で起こりうる日常の掃除で、そのたびに通知すると邪魔になるため
+ *
+ * 2段構えにしている:
+ *   - 履歴を**まるごと手放した**ときは必ず知らせる（「この時点に戻す」の選択肢が消えるため）
+ *   - 上限まで**縮めただけ**のときは、500KB 以上空いたときだけ知らせる（round1 P2-2）。
+ *     毎回の保存で起こりうる日常の掃除まで通知すると邪魔になるが、
+ *     起動時に何百KBも消えたことを黙っているのも「勝手に減った」に見える
  */
 export function buildStorageCleanupMessage(report: StorageCleanupReport): string | null {
-  if (report.clearedWorkIds.length === 0) return null;
-  return `保存領域が足りないため、古い復元履歴を整理しました（${report.clearedWorkIds.length}件の作品の「この時点に戻す」履歴を削除。作品そのものは残っています）`;
+  if (report.clearedWorkIds.length > 0) {
+    return `保存領域が足りないため、古い復元履歴を整理しました（${report.clearedWorkIds.length}件の作品の「この時点に戻す」履歴を削除。作品そのものは残っています）`;
+  }
+  if (report.trimmedWorkIds.length > 0 && report.freedBytes >= STORAGE_TRIM_NOTICE_MIN_BYTES) {
+    const freedMb = (report.freedBytes / (1024 * 1024)).toFixed(1);
+    return `保存領域を整理しました（${report.trimmedWorkIds.length}件の作品の古い復元履歴を上限まで減らして約${freedMb}MB空けました。作品そのものと最新の履歴は残っています）`;
+  }
+  return null;
 }

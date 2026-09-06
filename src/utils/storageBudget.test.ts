@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   buildStorageCleanupMessage,
+  STORAGE_TRIM_NOTICE_MIN_BYTES,
   dropOldestWorkHistory,
   enforceStorageBudget,
   formatStorageUsage,
@@ -20,7 +21,9 @@ import {
   createWork,
   getWorkStorageKeys,
   loadWorkHistory,
+  loadWorkAutosaveData,
   pushWorkHistoryGeneration,
+  restoreWorkHistoryGeneration,
   saveWorkAutosaveData,
   STORAGE_BYTES_PER_CHAR,
   WORK_HISTORY_MAX_BYTES,
@@ -123,6 +126,41 @@ describe('保存領域の予算と自動整理（Issue #641）', () => {
       expect(loadWorkHistory(workId).length).toBeGreaterThan(0);
     });
 
+    // 1世代だけで 1MB を超える大きさの作品（運用者の実作品は本体 1.2MB）。
+    // 12000小節 ≒ 1.2MB。作るのに少し時間がかかるのでヘルパーにして使い回す
+    const OVERSIZED_MEASURE_COUNT = 12000;
+
+    it('1世代だけで容量の上限を超える作品でも、最新の1世代は必ず残る（round1 P1）', () => {
+      const workId = seedWork('とても大きい作品');
+      const first = makeScore('世代1', OVERSIZED_MEASURE_COUNT);
+      expect(JSON.stringify(first).length * STORAGE_BYTES_PER_CHAR).toBeGreaterThan(WORK_HISTORY_MAX_BYTES);
+
+      expect(pushWorkHistoryGeneration(workId, first, { force: true }).success).toBe(true);
+      expect(loadWorkHistory(workId).length).toBe(1);
+
+      // 次の世代を積んでも「履歴が全部消える」ことはなく、新しい世代へ置き換わる（round1 P2-1）
+      pushWorkHistoryGeneration(workId, makeScore('世代2', OVERSIZED_MEASURE_COUNT), { force: true });
+      const history = loadWorkHistory(workId);
+      expect(history.length).toBe(1);
+      expect(history[0].data.metadata.title).toBe('世代2');
+    });
+
+    it('大きな作品でも「この時点に戻す」の前に、いまの内容が履歴へ残る（round1 P1）', () => {
+      const workId = seedWork('復元する大きい作品');
+      // 履歴に小さな世代 A、いまの自動保存は 1MB を超える B という状態
+      pushWorkHistoryGeneration(workId, makeScore('世代A'), { force: true });
+      const target = loadWorkHistory(workId)[0];
+      const current = makeScore('いまの内容B', OVERSIZED_MEASURE_COUNT);
+      expect(saveWorkAutosaveData(workId, current).success).toBe(true);
+
+      const result = restoreWorkHistoryGeneration(workId, target.timestamp);
+
+      expect(result.success).toBe(true);
+      // 自動保存は A に戻り、B は「戻す前の内容」として履歴に残っている
+      expect(loadWorkAutosaveData(workId).data?.metadata.title).toBe('世代A');
+      expect(loadWorkHistory(workId).map((item) => item.data.metadata.title)).toContain('いまの内容B');
+    });
+
     it('上限を超える履歴が既に保存されていても、整理で上限内へ収まる（仕様6）', () => {
       const workId = seedWork('昔の巨大な履歴を持つ作品');
       pushWorkHistoryGeneration(workId, makeScore('世代', 2000), { force: true });
@@ -216,11 +254,29 @@ describe('保存領域の予算と自動整理（Issue #641）', () => {
   });
 
   describe('整理の通知（仕様2）', () => {
-    it('履歴を手放したときだけ通知文を作る', () => {
-      expect(buildStorageCleanupMessage({ trimmedWorkIds: ['a'], clearedWorkIds: [], freedBytes: 0, usedBytes: 0 })).toBeNull();
+    it('履歴を手放したときは必ず通知文を作る', () => {
       const message = buildStorageCleanupMessage({ trimmedWorkIds: [], clearedWorkIds: ['a', 'b'], freedBytes: 1, usedBytes: 0 });
       expect(message).toContain('古い復元履歴を整理しました');
       expect(message).toContain('2件');
+    });
+
+    it('上限まで縮めただけのときは、500KB 以上空いたときだけ知らせる（round1 P2-2）', () => {
+      // 日常の掃除（数十KB）は黙っている
+      expect(buildStorageCleanupMessage({
+        trimmedWorkIds: ['a'], clearedWorkIds: [], freedBytes: 50 * 1024, usedBytes: 0,
+      })).toBeNull();
+
+      // まとまった量が消えたときは「勝手に減った」に見えないよう知らせる
+      const message = buildStorageCleanupMessage({
+        trimmedWorkIds: ['a'], clearedWorkIds: [], freedBytes: STORAGE_TRIM_NOTICE_MIN_BYTES, usedBytes: 0,
+      });
+      expect(message).toContain('保存領域を整理しました');
+      expect(message).toContain('0.5MB');
+      expect(message).toContain('最新の履歴は残っています');
+    });
+
+    it('何も整理していなければ通知しない', () => {
+      expect(buildStorageCleanupMessage({ trimmedWorkIds: [], clearedWorkIds: [], freedBytes: 0, usedBytes: 0 })).toBeNull();
     });
   });
 });
