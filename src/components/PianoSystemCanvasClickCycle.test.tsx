@@ -1,7 +1,7 @@
 // src/components/PianoSystemCanvasClickCycle.test.tsx
 // Issue #264: 当たり判定が重なる場所での「再クリック巡回」の結線テスト。
 //
-// 判定ロジックそのものは clickCycleUtils.test.ts が固定している。ここで見張るのは
+// 判定ロジックそのものは ../editor/clickCycleUtils.test.ts が固定している。ここで見張るのは
 // PianoSystemCanvas 側の結線、つまり
 //   ・当たり判定要素が巡回の候補として台帳へ登録されていること（data-cycle-id）
 //   ・1回目のクリックは従来どおりの優先順位（手前の対象）で処理されること

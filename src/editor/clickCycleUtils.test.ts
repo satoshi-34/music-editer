@@ -1,4 +1,4 @@
-// src/components/clickCycleUtils.test.ts
+// src/editor/clickCycleUtils.test.ts
 // Issue #264（クリック対象の再クリック巡回）の判定ロジックの単体テスト。
 //
 // ここで固定したいのは、運用者が決めた仕様そのもの:

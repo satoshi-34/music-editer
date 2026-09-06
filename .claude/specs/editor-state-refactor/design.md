@@ -743,3 +743,18 @@ export function handleNoteClick(
   editor から components へのこの依存を解消する。今回はレビュー済みの移設範囲を保つ。
 - ブラウザ確認画像を `docs/qa/evidence/click-cycle-selection.png` に保存し、PR本文にも添付した。
   画像は巡回後の表示の証跡であり、選択の往復は上記 DOM 属性の確認結果と合わせて読む。
+
+
+### 段6b-2 の先行分割: 巡回判定の依存方向整理（2026-09-06）
+
+- PR #698 の後続として、純粋判定 `clickCycleUtils.ts` と単体テストを components から
+  editor へ移した。冒頭のパスコメント以外は変更せず、巡回の仕様や分岐を維持する。
+- `editor/clickCycle.ts` は同じ editor 配下の判定を参照し、Canvas 側も editor の状態型を
+  参照する。旧パスの再 export は残さず、巡回に関する editor → components の依存を解消した。
+- 画面・保存形式・状態の所有者は変更なし。文脈型による描画関数の引数整理は別の変更単位とする。
+- 開発者向けの確認コマンドを移設後のテストパスへ更新した。
+- 検証: 元の実装・単体テストとの本文一致（冒頭パスコメントを除く）、全401ファイル・3,787件、
+  build、lint:ratchet（基準324件のまま）が通過。独立レビューで指摘された関連設計書の旧パスも更新。
+- ブラウザ: 実 Canvas の検証譜面で重なったスラーを3回クリックし、選択端点の DOM 属性が
+  a1 → a0 → a1 と切り替わることと表示を確認。コンソールエラーなし。画像は
+  `docs/qa/evidence/click-cycle-policy-selection.png` に保存。検証用ページは削除済み。
