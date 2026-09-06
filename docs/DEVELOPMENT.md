@@ -860,8 +860,10 @@ README の「使い方」は取扱説明として残しつつ、そこに混じ�
 - 符頭クリックのモード別処理は `src/editor/handlers/noteClick/`（types.ts に対象・書き込み口の型、モードごとのファイルに本文）。
   Canvas の switch は各 case で 1 回呼ぶだけ。新しいモードを移すときは NoteTarget に要る値だけを足す
   書き込み口は「譜面を書く NoteWriter」と「UI を開く NoteUiWriter」の 2 束。モード関数がどちらを受けるかで、譜面を変えるかが署名から分かる
-  読む口は `NoteReader`（最新ミラー・小節容量・休符置換の計画・設定）。幾何は `NoteTarget.geometry`（`NoteClickGeometry`）に束ねてある。
+  読む口は `NoteReader`（最新ミラー・小節容量・設定）。幾何は `NoteTarget.geometry`（`NoteClickGeometry`）に束ねてある。
   臨時記号付与は `noteClick/accidentalApply.ts`、フラグ系が passThrough のときの既定処理（音符セル・休符セル）は `noteClick/defaultOutcome.ts`
+- 音価 ⇄ 拍数の変換と休符クリックの置換・分割の計画は `src/editor/durationTools.ts`（単体テストは同名の .test.ts）。
+  拍数計算は `utils/voiceMeasureUtils` の `getDurationBeats` と同値（統合は #711）
 - 最小の自動確認: `npx vitest --run src/components/PianoSystemCanvasMeasureSelect.test.tsx src/components/PianoSystemCanvasTupletHideNumber.test.tsx src/components/PianoSystemCanvasClickCycle.test.tsx`
 - ブラウザ: 音価ツールで小節の空き部分をクリックして音符が入ること、小節選択ツール（または Shift+クリック）で
   小節が選ばれること、別声部の符頭クリックで声部が切り替わることを確認する

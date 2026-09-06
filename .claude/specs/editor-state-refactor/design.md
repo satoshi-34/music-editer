@@ -921,6 +921,22 @@ updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setText
   四分音符ツールによる休符→音符の置換、符頭の選択、和音追加（符頭 1→2）、♯ ツールでの付与（U+E262 が SVG に出る）と元に戻すでの復元を
   DOM で確認。コンソールエラーなし
 
+### 段6b-4f: 音価ヘルパと休符置換の計画を editor/durationTools.ts へ（2026-09-07）
+
+- `src/editor/durationTools.ts` … `VFDur / toVFDur / beatsFromVF / DURATION_TOOL_VALUES / durKeyFromBeats / getDurationTool /
+  dotBeatsMultiplier / eventOccupiedBeats / buildRestEditReplacement / defaultRestKeyForClef`（Canvas のモジュール関数 94 行＋3 行を
+  物理移設。本文・コメントは不変で `export` を付けただけ。機械比較 IDENTICAL）
+- 6b-4e で「関数を渡す暫定策」にしていた `NoteReader.getDurationTool / buildRestEditReplacement` を外し、`defaultOutcome.ts` が
+  直接 import する。NoteReader は `partsScoreRef / capacityBeatsAt / previewAccidentalOnApply` の 3 つに
+- `restKeyForClef` は Canvas の `applyDefaultRestDisplayLine` だけが使うので Canvas に残した。Canvas から不要になった import 7 つを掃除。
+  PianoSystemCanvas 8,442 → 8,343 行
+- 先行実装の注記: 拍数計算は `utils/voiceMeasureUtils` の `getDurationBeats / getEventDurationBeats` と同値で、
+  `components/RestOverlapFixV2` にも同じ変換の複製がある（measureRestFillUtils の冒頭注記と同じ）。この段は物理移設に徹し、
+  3 か所の統合は挙動に触りうるので別 Issue（#711。レビューの実測では未知の音価の丸め先は 3 か所とも 1 拍で一致）
+- 新規: `src/editor/durationTools.test.ts`（9 件。本文のコメントに書かれている例＝同長置換・分割と noteAfterRest・長い音価は null・
+  連符ツールでのグループ置換・変換表）で移設前の挙動を固定した
+- 検証: 本文の機械比較 IDENTICAL、tsc -b、フルテスト、lint:ratchet 基準値、独立レビュー 1 本（モジュール関数の移動のみ）
+
 ### 段6b-2 の先行分割: 巡回判定の依存方向整理（2026-09-06）
 
 - PR #698 の後続として、純粋判定 `clickCycleUtils.ts` と単体テストを components から

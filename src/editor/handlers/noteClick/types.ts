@@ -2,7 +2,7 @@
 // 符頭クリック（PianoSystemCanvas の 744 行のハンドラ）をモードごとに割って移すときの共通の引数型
 // （#695 段6b-4）。設計書 §17 の「文脈＋対象＋ツール＋書き込み口」のうち、対象（幾何を含む）・読む口・書き込み口をここに置く。
 // 値はすべて描画 effect のローカルそのもの（束ねても挙動は変わらない）。
-import type { DurKey, MeasureData, NoteEvent } from '../../../types/storage';
+import type { MeasureData, NoteEvent } from '../../../types/storage';
 import type { InstrumentType } from '../../../audio/SoundSource';
 import type { PartConfig } from '../../../components/PianoSystemCanvas';
 import type { RefObject } from 'react';
@@ -12,7 +12,6 @@ import type { AdjustTarget, OverlayStates, Sel } from '../../types';
 import type { Stave } from 'vexflow';
 import type { ClefType } from '../../../components/clefUtils';
 import type { KeySignature } from '../../../utils/noteKeyUtils';
-import type { Tool } from '../../../components/Palette';
 
 /** 描画時に声部へ束縛されたイベント列の要素。全休符プレースホルダーは __isPlaceholder が立つ */
 export type ClickableNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
@@ -83,7 +82,7 @@ export interface NoteTarget {
 }
 
 /**
- * 読む口（段6b-4e）: 譜面の最新ミラー・小節容量・ツールから「何を置くか」を導く関数・設定。
+ * 読む口（段6b-4e）: 譜面の最新ミラー・小節容量・設定（6b-4f で休符置換の関数 2 つは editor/durationTools へ移り、直接 import する）。
  * 譜面を書く NoteWriter と分けるのは、署名から「読むだけの依存」と「書く依存」を区別できるようにするため。
  * 値はいずれも Canvas の ref・関数・props そのもの。
  */
@@ -92,12 +91,6 @@ export interface NoteReader {
   partsScoreRef: { current: MeasureData[][] };
   /** 小節の容量（拍）。休符補完（fillPriorMeasureRests）に渡す */
   capacityBeatsAt: (absoluteMeasureIndex: number) => number;
-  /**
-   * ツールが音価ツールなら音価を返す／休符クリックの置換・分割の計画（Canvas のモジュール関数）。
-   * 音価ヘルパ 7 本（toVFDur / beatsFromVF / durKeyFromBeats …）と一緒に editor へ移す段まではここから受ける
-   */
-  getDurationTool: (tool: Tool) => { duration: DurKey; isRest?: boolean; dots?: 1 } | null;
-  buildRestEditReplacement: (restEvent: NoteEvent, key: string, tool: Tool, noteAfterRest: boolean, clef: ClefType) => NoteEvent[] | null;
   /** 臨時記号を付けたあとに確認音を鳴らすか（props。既定 true） */
   previewAccidentalOnApply: boolean;
 }
