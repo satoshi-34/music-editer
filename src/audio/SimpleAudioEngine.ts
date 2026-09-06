@@ -16,6 +16,7 @@ import {
   getMasterVolumeGain,
   type PlaybackSoundProfile
 } from './playbackSettings';
+import { ensureMainPathAnalyser, tapOutputToMainPathAnalyser } from './mainPathAnalyser';
 import { createVelocityFilterChain, velocityToAttackSeconds, normalizeVelocityTimbreStrength } from './velocityTimbre';
 import { applySwingToTiming } from '../utils/swingUtils';
 import { respellDoubleAccidentalKey } from '../utils/noteMidiUtils';
@@ -92,6 +93,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
   // すべての発音をこの GainNode 経由で destination へ流す。
   // ここの gain を変えるだけで全体音量（音量スライダー）が効く。
   private masterGainNode: GainNode | null = null;
+  // 診断専用: マスターゲインの出口を覗く AnalyserNode（issue #618）。
+  // destination には繋がないので音は増えない。context ごとに1つだけ持つ。
+  private mainPathAnalyser: AnalyserNode | null = null;
 
   constructor() {
     console.log('[SimpleAudioEngine] SimpleAudioEngineが初期化されました（AudioContextはユーザーインタラクション時に作成）');
@@ -370,6 +374,14 @@ export class SimpleAudioEngine implements PlaybackEngine {
    */
   getAudioContext(): AudioContext | null {
     return this.context;
+  }
+
+  /**
+   * 診断専用: 実音経路（マスターゲイン直後）の AnalyserNode を返す（issue #618）。
+   * まだ一度も発音していない場合は null（マスターゲインと同時に用意されるため）。
+   */
+  getMainPathAnalyser(): AnalyserNode | null {
+    return this.mainPathAnalyser;
   }
 
   /**
@@ -845,6 +857,10 @@ export class SimpleAudioEngine implements PlaybackEngine {
       this.masterGainNode = context.createGain();
       this.masterGainNode.gain.value = getMasterVolumeGain(this.soundProfile);
       this.masterGainNode.connect(context.destination);
+      // 実音の有無を測るための枝を張り直す（issue #618）。
+      // マスターゲインは context を作り直すたびに新しくなるので、そのたびに繋ぎ直す。
+      this.mainPathAnalyser = ensureMainPathAnalyser(context, this.mainPathAnalyser);
+      tapOutputToMainPathAnalyser(this.masterGainNode, this.mainPathAnalyser);
     }
     return this.masterGainNode;
   }
@@ -1577,8 +1593,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
         this.context.close();
         this.context = null;
       }
-      // 閉じた context に属する GainNode は再利用できないため捨てる
+      // 閉じた context に属する GainNode・AnalyserNode は再利用できないため捨てる
       this.masterGainNode = null;
+      this.mainPathAnalyser = null;
       
       this.isInitialized = false;
       this.hasPrimedOutput = false;

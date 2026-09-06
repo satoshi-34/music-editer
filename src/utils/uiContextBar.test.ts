@@ -36,7 +36,7 @@ describe('buildContextBarSegments', () => {
   });
 
   it.each(['single', 'quartet', 'ensemble'] as const)(
-    '%s ではレイヤーの区画を出さない（手×声部の選択が無い譜種なので）',
+    '%s で声部1だけを使っているあいだはレイヤーの区画を出さない',
     (scoreType) => {
       const segments = buildContextBarSegments({
         scoreType,
@@ -47,6 +47,22 @@ describe('buildContextBarSegments', () => {
       });
       expect(segments.map(s => s.key)).toEqual(['tab', 'tool']);
       expect(segments.map(s => s.value)).toEqual(['レイアウト', '2分休符']);
+    }
+  );
+
+  it.each(['single', 'quartet', 'ensemble'] as const)(
+    '%s でも声部2以降へ切り替えたら声部だけのレイヤー区画を出す（#417）',
+    (scoreType) => {
+      const segments = buildContextBarSegments({
+        scoreType,
+        activeLayerPart: 0,
+        activeVoice: 2,
+        activeToolbarTab: 'layout',
+        tool: { duration: '2', isRest: true },
+      });
+      expect(segments.map(s => s.key)).toEqual(['layer', 'tab', 'tool']);
+      // 手（右手・左手）はピアノ譜だけの概念なので、ここには出さない
+      expect(segments[0].value).toBe('声部3');
     }
   );
 

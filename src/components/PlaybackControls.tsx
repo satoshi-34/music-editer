@@ -61,6 +61,12 @@ export interface PlaybackControlsProps {
   onAudioRecovery?: () => void;
   /** 無音検知（issue #14）の通知メッセージ。null なら非表示 */
   audioHealthNotice?: string | null;
+  /**
+   * その通知から「音の調子がおかしいとき」（音声復旧）への導線を出してよいか（#618 round1 P3）。
+   * タブの音声経路そのものが壊れているという案内のときは false。
+   * 効かないと分かっている手段を勧めると、案内と導線が食い違って利用者を迷わせるため。
+   */
+  audioHealthNoticeAllowsRecovery?: boolean;
   /** 再生エンジンを通さない最小テスト音 */
   onEmergencyBeep?: () => void;
   /** 詳細な音源設定 */
@@ -199,6 +205,7 @@ export default function PlaybackControls({
   onInstrumentPreview,
   onAudioRecovery,
   audioHealthNotice = null,
+  audioHealthNoticeAllowsRecovery = true,
   onEmergencyBeep,
   soundRuntimeSettings,
   activeSoundEngineMode,
@@ -529,7 +536,7 @@ export default function PlaybackControls({
             {audioHealthNotice}
             {/* 診断（音声復旧・最小テスト音）は「音」区画の折りたたみの中へ移したので、
                 困っている人が探さずに済むよう通知から1クリックで開ける導線を置く（#562） */}
-            {hasDiagnostics && (
+            {hasDiagnostics && audioHealthNoticeAllowsRecovery && (
               <div style={{ marginTop: 6 }}>
                 <button
                   type="button"

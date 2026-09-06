@@ -16,6 +16,17 @@ export type PlaybackMeasureEventWithStart = NoteEvent & {
   eventIndex: number;
 };
 
+/**
+ * 1つの段（パート）に置ける声部の上限（運用者裁定 2026-09-02・#417）。
+ * VexFlow の実用上の上限であり、Finale の「レイヤー4つ」とも同じ数。
+ *
+ * UI ではなく**データ層**に置いてある。上限をチップの枚数だけで守ると、
+ * MusicXML 取り込みや手書きの保存データから5声以上が入ったときに
+ * 「画面に出ないまま再生・再保存される」隠れた声部ができてしまうため
+ * （Codex round1 P1-4）。書き込み・読込の両境界でこの値を強制する。
+ */
+export const MAX_VOICES_PER_PART = 4;
+
 const DURATION_TO_BEATS: Record<NoteEvent['dur'], number> = {
   '1': 4,
   '2': 2,
@@ -187,6 +198,14 @@ export function withVoiceEventsUpdated(
   voiceIndex: number,
   updater: (events: NoteEvent[]) => NoteEvent[],
 ): MeasureData {
+  // 上限を超える声部への書き込みは受け付けない（#417 Codex round1 P1-4）。
+  // UI（チップと V キー）は 0..MAX-1 しか選べないのでここへは来ない想定だが、
+  // 上限をUI側だけで守ると、将来ここを別経路から呼んだときに
+  // 「画面に出ない声部へ音符が入り、再生と保存にだけ現れる」隠れた状態ができる。
+  // 変化なしの約束（Issue #245）に合わせて、引数の measure をそのまま返す
+  if (voiceIndex >= MAX_VOICES_PER_PART) {
+    return measure;
+  }
   if (voiceIndex <= 0) {
     const nextEvents = updater(measure.events ?? []);
     // no-op（updater が同一参照を返した）なら元の measure をそのまま返す（#244 段5-4・
@@ -278,6 +297,40 @@ export function collapseEmptyTrailingVoices(measure: MeasureData): MeasureData {
     return { ...withoutVoices, events: measure.events ?? voices[0].events ?? [] };
   }
   return { ...measure, voices: voices.slice(0, voiceCount) };
+}
+
+/**
+ * 上限（MAX_VOICES_PER_PART）を超える声部を、読込の境界で切り落とす（#417 Codex round1 P1-4）。
+ *
+ * なぜ必要か: 外から来るデータ（他アプリが書き出した MusicXML・手で編集された .score.json）は
+ * 5声以上を持ちうる。切らずに読むと、編集 UI には出ないのに再生では鳴り、保存し直すと
+ * そのまま残る「画面から見えない声部」になる。見えないものは直せないので、
+ * 読んだ時点で落とし、**落としたことを呼び出し側が通知できるように件数を返す**
+ * （黙って捨てるのは #318「行き止まりは喋る」に反する）。
+ *
+ * 末尾から落とすのは collapseEmptyTrailingVoices と同じ理由で、途中を抜くと
+ * 後ろの声部の番号がずれ、弧・松葉が指す先（声部ローカルの索引）まで意味が変わるため。
+ *
+ * @returns 変化が無ければ引数の配列をそのまま返す（参照比較で判定できる・Issue #245）
+ */
+export function enforceVoiceLimitInParts(parts: PartData[]): {
+  parts: PartData[];
+  /** 上限を超えて落とした声部を持っていた小節の数（0 なら何も落としていない） */
+  droppedMeasureCount: number;
+} {
+  let droppedMeasureCount = 0;
+  const next = parts.map((part) => {
+    const measures = part.measures.map((measure) => {
+      if (!measure.voices || measure.voices.length <= MAX_VOICES_PER_PART) return measure;
+      droppedMeasureCount += 1;
+      return { ...measure, voices: measure.voices.slice(0, MAX_VOICES_PER_PART) };
+    });
+    return measures.some((m, i) => m !== part.measures[i]) ? { ...part, measures } : part;
+  });
+  return {
+    parts: next.some((part, i) => part !== parts[i]) ? next : parts,
+    droppedMeasureCount,
+  };
 }
 
 /**

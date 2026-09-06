@@ -83,7 +83,17 @@ const mockContext = {
     gain: { value: 1, setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
     connect: vi.fn(), disconnect: vi.fn(),
   })),
-  createAnalyser: vi.fn(() => ({ fftSize: 2048, connect: vi.fn(), disconnect: vi.fn(), getFloatTimeDomainData: vi.fn() })),
+  // 波形を「有音」で返す（#618 round1 P2）。常に 0 を返す偽 Analyser のままだと、
+  // このテストの再生が毎回「タブの音声経路が壊れています」の経路へ入ってしまい、
+  // 窓の配線を見ているつもりで別の分岐を通っていた
+  createAnalyser: vi.fn(() => ({
+    fftSize: 2048,
+    frequencyBinCount: 128,
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    getFloatTimeDomainData: vi.fn((data: Float32Array) => { data.fill(0.2); }),
+    getByteTimeDomainData: vi.fn((data: Uint8Array) => { data.fill(200); }),
+  })),
 };
 
 function seedWork(measureCount: number) {
@@ -147,15 +157,16 @@ describe('先読み窓の逐次スケジューリング（Issue #622）', () => 
     // 時計を進めると続きが作られる（窓の進行は実時間の setTimeout 500ms）
     mockContext.currentTime = 10;
     await waitFor(() => { expect(createdOscillators.length).toBeGreaterThan(firstWindowCount); }, { timeout: 3000 });
-    // 停止すると以後は作られない。ヘルスチェックの試験波形（AnalyserNode と対で作られる
-    // オシレーター）は再生の予約ではないので、その分だけは差し引いて数える
+    // 停止すると以後は何も作られない。停止は予約済みのヘルスチェックも取り消すので
+    // （#618 round1 P2: 停止でマスターゲインが切れた無音を故障と誤検知しないため）、
+    // 試験波形（AnalyserNode とオシレーターの対）も増えない
     fireEvent.click(screen.getByRole('button', { name: '停止' }));
     const atStop = createdOscillators.length;
     const probesAtStop = mockContext.createAnalyser.mock.calls.length;
     mockContext.currentTime = 30;
     await new Promise((resolve) => setTimeout(resolve, 1200));
-    const probesAdded = mockContext.createAnalyser.mock.calls.length - probesAtStop;
-    expect(createdOscillators.length - atStop).toBe(probesAdded);
+    expect(mockContext.createAnalyser.mock.calls.length).toBe(probesAtStop);
+    expect(createdOscillators.length).toBe(atStop);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('後続の窓の予約失敗で「再生中」のまま残らず、停止して理由を知らせる（round2 P2）', async () => {

@@ -227,8 +227,9 @@ describe('MusicXML の文字強弱（pp〜ff）読み込み（Issue #552）', ()
     expect(left.measures[0].events[0].dynamics).toEqual([{ value: 'f' }]);
   });
 
-  it('声部3では松葉を復元しない（round2 P2: 小節またぎで壊れた松葉を作らない）', () => {
-    // 声部3に <wedge> がある（自分の書き出しでは作らないが外部ファイルではあり得る）
+  it('声部3の松葉も復元する（#417 Codex round1 P1-5: 編集 UI が N 声になったので往復で消さない）', () => {
+    // 声部3に <wedge> がある。2声までしか編集できなかった頃は捨てていたが、
+    // 声部3・4にも松葉を置けるようになった以上、捨てると無通知の欠損になる
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <score-partwise version="3.1">
   <part-list><score-part id="P1"><part-name>M</part-name></score-part></part-list>
@@ -247,8 +248,8 @@ describe('MusicXML の文字強弱（pp〜ff）読み込み（Issue #552）', ()
 </score-partwise>`;
     const imported = parseMusicXml(xml);
     const v3 = imported.parts[0].measures[0].voices?.[2]?.events?.[0];
-    // 文字強弱は復元し、松葉は付かない
+    // 文字強弱も松葉もどちらも復元する
     expect(v3?.dynamics).toEqual([{ value: 'f' }]);
-    expect(v3?.hairpins).toBeUndefined();
+    expect(v3?.hairpins?.[0]?.type).toBe('cresc');
   });
 });

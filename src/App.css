@@ -1971,7 +1971,7 @@ button.ghost.active:hover:not(:disabled) {
   border-radius: 4px;
 }
 
-/* 段の上端＝上の段との境界帯（Issue #523 = #450 の子2・SystemGapDragHandle.tsx）。
+/* 段の上端＝上の段との境界帯（Issue #523 = #450 の子2・LayoutGapDragBand.tsx）。
    選択中の段にだけ出す「上下ドラッグの掴みしろ」で、掴んで動かすとその境界そのもの
    （上の段との距離＝ラッパーの margin-top）が指について変わる。
    下端ではなく上端へ置くのは「掴んだ境界が動く」ようにするため（round1 P1）。段の間隔は
@@ -2088,6 +2088,17 @@ button.ghost.active:hover:not(:disabled) {
   pointer-events: none;
 }
 
+/* 段の中のパート境界の帯（Issue #572・LayoutGapDragBand.tsx を段の上端の帯と共用）。
+   置き場所だけが違う: 段の上端（bottom: 100%）ではなく、五線と五線の間の境界の上に
+   重ねる。境界の y は譜種とパート間隔で変わるので、top はインラインで渡している。
+   margin-top: -7px は「帯の中の線（::before の top: 6px・高さ2px）の中心」を境界へ
+   合わせるための補正で、掴んだ線と実際に動く境界が視覚的に一致する。
+   出るのはレイアウトタブ（整えるモード）の間だけなので、五線の中に重なっても普段の音符入力は妨げない
+   （音符・休符タブへ戻せば元どおり。段の選択は不要・#614 以降）。 */
+.system-gap-drag-handle--part {
+  bottom: auto;
+  margin-top: -7px;
+}
 /* ドラッグ中にカーソルの近くへ出す現在値（#318「何が変わっているか見せる」）。
    カーソルの下敷きにならないよう、当たり判定は持たせない（pointer-events: none） */
 .system-gap-drag-value {
@@ -3105,4 +3116,21 @@ svg { animation: none; transition: none; }
   .home-card-grid {
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   }
+}
+
+/* レイヤーチップ（#417）: 手ごとのまとまり。折り返しても「＋」がどちらの手のものか分かるよう、
+   手のチップ列と「＋」を1つの箱に入れて、箱の途中では折り返らないようにする（Codex round1 P2-8） */
+.toolbar-layer-part-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  /* 箱の中で改行しない = 「右手の…＋」が必ず一緒に並ぶ */
+  flex-wrap: nowrap;
+}
+
+/* 上限に達した「＋」。disabled 属性は使わない（押せると理由が通知される・Codex round1 P2-7）ので、
+   押せなさそうな見た目だけをここで作る */
+.toolbar-add-voice-button.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }

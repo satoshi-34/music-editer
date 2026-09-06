@@ -40,6 +40,7 @@ import {
   describeSymbolDeleted,
   describeActiveVoiceSwitched,
   describeVoiceSwitchUnavailable,
+  requestActivePartChange,
   describeCrossStaffToggled,
   describeCrossStaffUnavailable,
   describeMidMeasureClefUnavailable,
@@ -172,7 +173,7 @@ import {
   widenThinBarlineRect,
   markThickBarlineRect,
 } from '../utils/engravingDefaults';
-import { buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getEventDurationBeats, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { MAX_VOICES_PER_PART, buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getEventDurationBeats, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildBeatColumns, planLeadingRestFillBeats, type BeatColumn } from '../utils/beatColumnUtils';
 import { sliceBoundaryCandidates, snapToSliceBoundary } from '../utils/beatSliceUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
@@ -4937,15 +4938,16 @@ export default function PianoSystemCanvas({
           // ものかは画面から見分けられないため、押しても無反応に見える
           const layerPartChanged = activeLayerPartIndex != null && partIndex !== activeLayerPartIndex;
           const voiceChanged = symbolVoiceIndex !== activeVoiceIndex;
-          // 編集 UI（声部トグル）は2声まで。3声以降のデータは表示・再生・書き出しのみ対応
-          // なので、切り替え要求を ScorePage が黙って無視して「切り替えたと言われたのに
-          // 実状態は変わらないまま編集できてしまう」食い違いを防ぐ（音符クリックと同じ
-          // ガード・#318 / #244 段5-5）
-          if (voiceChanged && symbolVoiceIndex > 1) {
+          // 編集 UI は上限（4声/段）まで対応する（#417 Codex round1 P1-2。音符クリックと同じガード）。
+          // 上限を超える声部は読込の境界で落としているので通常は来ないが、
+          // 来たときに黙って無視すると「切り替えたと言われたのに実状態は変わらない」
+          // 食い違いになるため、理由を言って終える（#318 / #244 段5-5）
+          if (voiceChanged && symbolVoiceIndex >= MAX_VOICES_PER_PART) {
             notifyScoreEdit(describeVoiceSwitchUnavailable(symbolVoiceIndex));
             return false;
           }
           if (layerPartChanged || voiceChanged) {
+            requestActivePartChange(partIndex);
             requestActiveVoiceChange(symbolVoiceIndex, activeLayerPartIndex != null ? partIndex : undefined);
             notifyScoreEdit(layerPartChanged
               ? describeActiveLayerSwitched(layerPartLabel(partIndex), symbolVoiceIndex)
@@ -6499,6 +6501,9 @@ export default function PianoSystemCanvas({
             }
             // 連符グループでも、クリックした拍まで手前を休符で埋める（Issue #322 の受入条件）。
             const leading=buildLeadingRests(groupBeats, voiceCountAfterInsert);
+            // 空白クリックの入力も「この段を触った」に数える（#417 round2 P2-1: 非ピアノ譜で
+            // チップ列と「＋」の対象が、いま書いている段に追従するように）
+            requestActivePartChange(pi);
             setScore(prev=>{
               const next=prev.map(cloneMeasureData);
               while(absI>=next.length)next.push(createEmptyMeasure());
@@ -6542,6 +6547,9 @@ export default function PianoSystemCanvas({
             : insertedEventBase;
 
           const leading=buildLeadingRests(addBeats, voiceCountAfterInsert);
+          // 空白クリックの入力も「この段を触った」に数える（#417 round2 P2-1: 非ピアノ譜で
+          // チップ列と「＋」の対象が、いま書いている段に追従するように）
+          requestActivePartChange(pi);
           setScore(prev=>{
             const next=prev.map(cloneMeasureData);
             while(absI>=next.length)next.push(createEmptyMeasure());
@@ -7051,7 +7059,7 @@ export default function PianoSystemCanvas({
           const otherVfNotes=entry.vfNotes;
           const otherEvs=entry.sourceEvents;
           if(otherVfNotes.length===0)return;
-          // 切り替え先の声部。声部トグルは 0/1 の2つだけなので、型もその2値へそろえる。
+          // 切り替え先の声部（#417 で 0..3 の4声まで）。
           const targetVoiceIndex=entry.voiceIndex;
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const anchors=otherVfNotes.map((n:any,j)=>n.getAbsoluteX?n.getAbsoluteX():measLeft+(j+1)*(measRight-measLeft)/(otherVfNotes.length+1));
@@ -7073,13 +7081,15 @@ export default function PianoSystemCanvas({
             const switchVoiceAndSelect=(clientX:number,clientY:number)=>{
               const keyIndex=resolveKeyIndexAtClient(clientX,clientY);
               if(keyIndex<0)return;
-              // 編集 UI（声部トグル）は2声まで。3声以降のデータは表示・再生・書き出しのみ
-              // 対応なので、切り替え要求を ScorePage が黙って無視して選択と実状態が
-              // 食い違う前に、ここで理由と対応範囲を伝えて終える（#318・#244 段5-5）
-              if (targetVoiceIndex > 1) {
+              // 編集 UI は上限（4声/段）まで対応する（#417 Codex round1 P1-2）。
+              // 以前は2声までで、声部3・4の符頭を押しても切り替わらなかった。
+              // 上限を超えるデータは読込の境界で落としているのでここへは来ない想定だが、
+              // 万一来ても黙って無視せず理由を言って終える（#318「行き止まりは喋る」）
+              if (targetVoiceIndex >= MAX_VOICES_PER_PART) {
                 notifyScoreEdit(describeVoiceSwitchUnavailable(targetVoiceIndex));
                 return;
               }
+              requestActivePartChange(pi);
               setSelectedArc(null);
               setSelectedHairpin(null);
               setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:entry.voiceIndex,keyIndex});
@@ -7224,6 +7234,9 @@ export default function PianoSystemCanvas({
               setSelectedArc(null);
               setSelectedHairpin(null);
               setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex});
+              // どの段を編集しているかをレイヤーチップへ伝える（#417 P1-3）。
+              // 非ピアノ譜はパートを五線のクリックで選ぶので、ここが唯一の手がかりになる
+              requestActivePartChange(pi);
               const ev=activeEvs[j];
               playNoteEvent({...ev,keys:[ev.keys[keyIndex]]}, part.playbackInstrument);
             };
