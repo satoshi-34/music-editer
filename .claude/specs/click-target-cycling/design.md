@@ -4,7 +4,8 @@
 仕組み（Illustrator / Figma のクリックスルー方式）の設計。
 
 - 対象コンポーネント: `src/components/PianoSystemCanvas.tsx`（全譜種がここを通る）
-- 判定ロジック: `src/components/clickCycleUtils.ts`（DOM に依存しない純関数）
+- 巡回の入口・候補台帳: `src/editor/clickCycle.ts`（Canvas が描画ごとに生成）
+- 判定ロジック: `src/editor/clickCycleUtils.ts`（DOM に依存しない純関数）
 - 関連: Issue #257（弧の当たり判定を中央部へ限定・音符ヒットを前面へ）、#246（拡張ヒット帯のX方向）、
   #233（休符の1クリック置換）、#218 / #219（当たり判定の帰属）
 
@@ -151,10 +152,12 @@ planClickCycle(state, x, y, candidateIds /* 手前→奥 */, selfId):
 
 ### 変更したファイル
 
+以下のパスは2026-09-06の分離後の配置を記載する。純粋判定とそのテストは editor 配下へ移設済み。
+
 | ファイル | 変更 |
 | --- | --- |
-| `src/components/clickCycleUtils.ts` | 新規。純関数の判定ロジック |
-| `src/components/clickCycleUtils.test.ts` | 新規。1回目は巡回しない／2回目から巡回／一巡で先頭へ戻る等を固定 |
+| `src/editor/clickCycleUtils.ts` | 新規。純関数の判定ロジック |
+| `src/editor/clickCycleUtils.test.ts` | 新規。1回目は巡回しない／2回目から巡回／一巡で先頭へ戻る等を固定 |
 | `src/components/PianoSystemCanvas.tsx` | 台帳と入口（`registerClickCycleTarget` / `tryClickCycle` / `armClickCycleFor`）、音符・弧・松葉への結線。選択枠 rect に `data-measure` / `data-note` を追加（テスト用・表示不変） |
 | `src/utils/hairpinRenderUtils.ts` | `onHitPathCreated` を追加（省略時は従来と完全に同じ） |
 | `src/components/PianoSystemCanvasClickCycle.test.tsx` | 新規。結線のテスト（`elementsFromPoint` を差し替えて重なりを再現） |
@@ -182,7 +185,7 @@ planClickCycle(state, x, y, candidateIds /* 手前→奥 */, selfId):
 
 ### 自動テスト
 
-- `src/components/clickCycleUtils.test.ts`: 判定ロジック（座標の許容誤差・1回目・2回目・3件の巡回・
+- `src/editor/clickCycleUtils.test.ts`: 判定ロジック（座標の許容誤差・1回目・2回目・3件の巡回・
   候補が減ったとき・通しシナリオ）
 - `src/components/PianoSystemCanvasClickCycle.test.tsx`: 結線（`data-cycle-id` の付与、
   スラー→音符→スラー、音符→スラー→音符、**弧を選んだあと同じ場所から掴んでドラッグしても

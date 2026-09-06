@@ -1,5 +1,5 @@
 import type { RefObject } from 'react';
-import { armClickCycle, planClickCycle, type ClickCycleState } from '../components/clickCycleUtils';
+import { armClickCycle, planClickCycle, type ClickCycleState } from './clickCycleUtils';
 import type { ClickCycleTarget, PendingClickCycle } from './types';
 
 interface ClickCycleRefs {

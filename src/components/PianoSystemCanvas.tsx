@@ -28,7 +28,7 @@ import {
   keyToLine as keyToLineForClef,
 } from './clefUtils';
 import { computeArcGeometry, computeArcTaperGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
-import type { ClickCycleState } from './clickCycleUtils';
+import type { ClickCycleState } from '../editor/clickCycleUtils';
 import { createClickCycle } from '../editor/clickCycle';
 import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY, estimatePedalBottomExtensionPx, PEDAL_TEXT_DESCENT_PX } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';

@@ -1,4 +1,4 @@
-// src/components/clickCycleUtils.ts
+// src/editor/clickCycleUtils.ts
 // 「同じ場所の再クリックで編集対象を切り替える」巡回（クリックスルー）の判定ロジック。
 //
 // 当たり判定が重なる場所（符頭とスラー、重なった弧同士など）では、SVG の規則で
