@@ -826,6 +826,19 @@ updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setText
   ことを DOM で確認し、元に戻すで譜面を復元（グリフ 0・元に戻す無効）。画像は `docs/qa/evidence/note-click-6b4a-dynamic.png`
   （ブラウザペインが非表示だったため、描画された SVG を Bravura で再描画したもの）
 
+### 段6b-4b: 「トグルで付け外し」3 モード（ornament / pedal / ottava）を handlers/noteClick へ（2026-09-06）
+
+- `src/editor/handlers/noteClick/symbolToggle.ts` … `ornamentNoteClick / pedalNoteClick / ottavaNoteClick`
+  （`case 'ornament' / 'pedal' / 'ottava'` の本文 7 / 10 / 15 行（case 行と閉じ括弧を除く）を移設。案 6b-4a と同じ NoteTarget / NoteWriter を
+  使い、NoteTarget には何も足していない。音は鳴らさないので writer からは updateHitEvent / setSelected だけ使う）
+- 休符の扱いはモードごとに違う（装飾記号は passThrough、ペダル・オッターバは休符にも付くがプレースホルダーは
+  passThrough）。本文のコメントごと移設し、分岐は変えていない
+- `(tool as any).ornamentType as OrnamentType` 等の as any は本文のまま（新設ではなく移動なので lint:ratchet は不変）
+- Canvas から移った import（applyOrnamentToEvent / describeOttavaRemoved / describeOttavaPlaced）を掃除
+- 検証: 本文の機械比較 IDENTICAL（3 モード）、tsc、フルテスト、lint:ratchet 基準値、独立レビュー、ブラウザで
+  ペダル記号（Ped）ツールで m1 の 3 音目を押し、ペダル要素が 0→1・選択がその音符に移る・元に戻すが有効になることを DOM で
+  確認し、元に戻すで復元（0・無効）。譜面は変更していない（ブラウザペイン非表示のため DOM 確認のみ・画像なし）
+
 ### 段6b-2 の先行分割: 巡回判定の依存方向整理（2026-09-06）
 
 - PR #698 の後続として、純粋判定 `clickCycleUtils.ts` と単体テストを components から
