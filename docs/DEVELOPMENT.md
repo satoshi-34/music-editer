@@ -848,7 +848,8 @@ README の「使い方」は取扱説明として残しつつ、そこに混じ�
 - 束の値は effect 開始時のスナップショット。live の選択が要る処理は `latestRef` を別引数で受ける
   （types.ts の SelectionContext の注意書き）。
 - 最小の自動確認: `npx vitest --run src/components/PianoSystemCanvasClickCycle.test.tsx src/components/PianoSystemCanvasDragCancel.test.tsx`
-  に加えて `npx tsc --noEmit` と `npm run lint:ratchet`（分割代入の残骸は未使用変数として基準値を超える）。
+  に加えて `npx tsc -b` と `npm run lint:ratchet`（分割代入の残骸は未使用変数として基準値を超える）。
+  **`npx tsc --noEmit -p .` は何も検査しない**（ルート tsconfig は `files: []` の references 構成）。型検査は build と同じ `tsc -b` で行う
 - ハンドラの自由変数を数えるときは `node scripts/free-ids.cjs src/components/PianoSystemCanvas.tsx <開始行>`
   （開始行に `addEventListener` があれば終端は自動で拾う）。
 
