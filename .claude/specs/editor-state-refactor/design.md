@@ -717,3 +717,29 @@ export function handleNoteClick(
 - 自由変数は `scratchpad/free-ids.cjs`（TypeScript AST）で列挙してから引数を決める
 - 各 PR: tsc・フルテスト・lint:ratchet 基準値・独立レビュー 1 本（型だけの段）〜2 本（ハンドラを動かす段）
 - 段6b-3 以降は `PianoSystemCanvas` を触る ai-ready（#645 #653 #657 #693 ほか）を一時的に外す
+
+
+### 段6b-2 の先行分割: 再クリック巡回（2026-09-06）
+
+- 読みやすさを小さな単位で確認するため、今回は `createClickCycle` の独立だけを行った。
+  Selection / Layer / Ledger の文脈型と描画関数の引数整理は次段に残す。
+- `src/editor/clickCycle.ts` が候補の登録・重なり順の収集・巡回計画・確定・初回選択の記録を担当する。
+  Canvas は SVG と、自身が所有する巡回状態・候補台帳の2つの ref を渡し、5つの操作関数を受け取る。
+- 呼出位置は従来の台帳初期化位置と同じ。台帳は描画ごとに初期化し、巡回状態と保留計画は
+  Canvas が引き続き保持する。state の持ち主・DOM の検索範囲・候補の順序は変えない。
+- 元の処理本文とインデントを除いて一致することを機械的に確認した。新しい条件分岐や通知は追加していない。
+- 検証: 関連24件、全体401ファイル・3,787件のテスト、build、lint:ratchet が通過。
+  lint は既存基準324件のまま。独立した静的レビューでも指摘なし。
+- ブラウザ: 一時的な検証譜面に実際の Canvas をマウントし、重なった2本のスラーを
+  同じ座標でクリック。選択端点の DOM 属性が a1 → a0 → a1 と変わることと画面表示を確認。
+  検証ページの初版の import 誤りを修正した後は、新たなコンソールエラーなし。
+  検証用ページは確認後に削除した。音符とスラーの巡回は既存回帰テストで確認。
+
+#### PR #698 レビュー対応
+
+- `prepareClickCycle` の戻り値を `PendingClickCycle | null` と明示した。実行時の処理は変更しない。
+- 現在の `editor/clickCycle.ts` → `components/clickCycleUtils.ts` の依存は移行途中のもの。
+  後続の段6b-2で純粋判定とそのテストを editor 配下へ移し、Canvas 側の型参照も更新して
+  editor から components へのこの依存を解消する。今回はレビュー済みの移設範囲を保つ。
+- ブラウザ確認画像を `docs/qa/evidence/click-cycle-selection.png` に保存し、PR本文にも添付した。
+  画像は巡回後の表示の証跡であり、選択の往復は上記 DOM 属性の確認結果と合わせて読む。
