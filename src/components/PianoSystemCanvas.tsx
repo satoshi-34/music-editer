@@ -42,12 +42,15 @@ import {
   lineToKey as lineToKeyForClef,
   keyToLine as keyToLineForClef,
 } from './clefUtils';
-import { computeArcGeometry, computeArcTaperGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
+import { computeArcTaperGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
 import type { ClickCycleState } from '../editor/clickCycleUtils';
 import { createClickCycle } from '../editor/clickCycle';
 import { attachDragWindowSafety } from '../editor/dragSessions/windowSafety';
 import { attachArcDragWindowListeners } from '../editor/dragSessions/arcDrag';
 import { attachSymbolOffsetDragWindowListeners } from '../editor/dragSessions/symbolOffsetDrag';
+import { attachSvgDragListeners } from '../editor/dragSessions/svgTiePreview';
+import { attachMeasureSelectDrag as attachMeasureSelectDragListeners } from '../editor/dragSessions/measureSelectDrag';
+import { attachNoteArcDragListeners } from '../editor/dragSessions/noteArcDrag';
 import { updateVoiceEventInMeasures } from '../utils/voiceEventUpdate';
 import { handleMeasureBackgroundClick } from '../editor/handlers/measureClick';
 import { handleVoice2NoteClick } from '../editor/handlers/voice2Click';
@@ -468,8 +471,6 @@ function getKeySignatureHitBounds(
   return clampBounds(timeX + timeWidth, fallbackRight);
 }
 
-
-
 function getPreviewLedgerLines(snappedLine: number): number[] {
   const lines: number[] = [];
   if (snappedLine <= -1) {
@@ -484,20 +485,6 @@ function getPreviewLedgerLines(snappedLine: number): number[] {
   return lines;
 }
 
-
-// クリックしたY座標に最も近い和音内の key を返す（タイ開始符頭の特定に使う）
-function findNearestKey(
-  keys: string[], localY: number, stave: Stave,
-  keyToLineFn: (k: string) => number
-): string {
-  let bestKey = keys[0] ?? 'b/4';
-  let bestDist = Infinity;
-  for (const key of keys) {
-    const dist = Math.abs(localY - stave.getYForLine(keyToLineFn(key)));
-    if (dist < bestDist) { bestDist = dist; bestKey = key; }
-  }
-  return bestKey;
-}
 
 
 // 「クリックしたら選択になるか、追加になるか」がホバーだけでは分からず、
@@ -4362,65 +4349,8 @@ export default function PianoSystemCanvas({
       return false;
     };
 
-    // ドラッグの確定/キャンセル直後に必ず1回来る click は、**capture フェーズで1回だけ消費**する
-    //（#244 段2・Codexレビュー4巡目）。個別ハンドラ先頭のガード方式には2つの穴があった:
-    //   (a) ガードは伝播を止めないため、同じ click が SVG 背景ハンドラまで進んで
-    //       選択中の弧を解除してしまう
-    //   (b) 記号・松葉のヒット領域は自前で stopPropagation するためガードに届かず素通り
-    // capture はどの要素ハンドラよりも先に走るので、ここで消費して遮断すれば
-    // 到達先がどこであっても1回で確実に読み飛ばせる。消費の実装はこの1箇所だけにする。
-    // 仕様の dispatch 上は stopPropagation でも足りる（capture 側で stop propagation
-    // フラグが立てば、同一要素の bubble 側 invoke も開始時に打ち切られる。jsdom で実証済み）。
-    // それでも **stopImmediatePropagation** を使うのは防御のため: 将来この svg の
-    // capture フェーズ（＝同一フェーズ）にリスナーが追加されても、消費済み click を
-    // 確実に遮断できる（同一フェーズの後続リスナーは stopPropagation では止まらない）。
-    svg.addEventListener('click',(e)=>{
-      // 記号のドラッグ（Issue #522）も同じ扱い。ドラッグ中に SVG は作り直されるため、
-      // 離した後の click は当たり判定 rect ではなく背景へ届くことがある
-      if(dragSessionsRef.current.arcMoved||dragSessionsRef.current.symbolOffsetMoved){
-        dragSessionsRef.current.arcMoved=false;
-        dragSessionsRef.current.symbolOffsetMoved=false;
-        e.stopImmediatePropagation();
-      }
-    },true);
-
-    // SVG 背景クリック → 弧の選択を解除
-    //（ドラッグ直後の click は上の capture 消費が先に遮断するため、ここには届かない）
-    svg.addEventListener('click',()=>{
-      dragSessionsRef.current.tieStart=null;
-      tiePreviewPath.style.display='none';
-      setSelectedArc(null);
-      setSelectedHairpin(null);
-    });
-
-    svg.addEventListener('mousemove',(ev)=>{
-      // 弧のドラッグ中（端点・曲率）は window 側のハンドラが処理するので、ここでは何もしない。
-      // 両方で処理すると同じ mousemove を2回適用してしまい、弧がカーソルの倍の速さで動く。
-      if(dragSessionsRef.current.arcEp||dragSessionsRef.current.arcCp)return;
-      // タイ／松葉 新規ドラッグのプレビュー
-      if(!dragSessionsRef.current.tieStart||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
-      const{x:mx,y:my}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY);
-      const{noteX:sx,noteY:sy,stemDir}=dragSessionsRef.current.tieStart;
-      const upward=stemDir!==1;
-      // 段またぎドラッグでは mx < sx（右→左）になるため Math.abs で判定する
-      const hasMoved=Math.abs(mx-sx)>4||Math.abs(my-sy)>4;
-      if(tool.mode==='hairpin'){
-        // 松葉は弧ではなく直線区間の記号なので、プレビューも点線の直線で示す
-        tiePreviewPath.setAttribute('d',`M ${sx} ${sy} L ${mx} ${my}`);
-      }else{
-        // 段またぎ時はマウスY座標も使って始点→現在位置のプレビュー弧を描く
-        const{dAttr:d}=computeArcGeometry(sx,sy,mx,my,upward,'slur',stemDir,undefined,0);
-        tiePreviewPath.setAttribute('d',d);
-      }
-      tiePreviewPath.style.display=hasMoved?'block':'none';
-    });
-    svg.addEventListener('mouseup',()=>{
-      // 弧のドラッグの確定は window 側（arcDrag セッション）が受け持つ。
-      // ここで受けると、SVG の外で指を離したときだけ確定されない不公平が生まれる。
-      if(dragSessionsRef.current.arcEp||dragSessionsRef.current.arcCp)return;
-      dragSessionsRef.current.tieStart=null;
-      tiePreviewPath.style.display='none';
-    });
+    // ドラッグ直後の click の読み飛ばし・背景クリックでの弧の選択解除・タイ／松葉のプレビュー（editor/dragSessions/svgTiePreview.ts。#695 段6c-2）
+    attachSvgDragListeners({ svg, svgRoot, dragSessionsRef, tiePreviewPath, tool, setSelectedArc, setSelectedHairpin });
 
     // scale prop は ScorePage から「実効レンダースケール」（SCORE_LAYOUT_RENDER_SCALE ×
     // レイアウトタブの『音符の大きさ』ユーザー倍率）を渡す口。以前は SCORE_LAYOUT_RENDER_SCALE を
@@ -5685,58 +5615,8 @@ export default function PianoSystemCanvas({
         // 小節選択の入力（クリック・ドラッグ範囲選択）をこの小節の当たり判定へ付ける。
         // 小節の背景（.vf-hit）だけでなく音符の当たり判定（.vf-note-hit）にも同じものを
         // 付ける: 音符の上を通ってドラッグしても範囲選択が途切れないようにするため。
-        const attachMeasureSelectDrag = (el: SVGElement) => {
-          el.addEventListener('mousedown', ev => {
-            if (disabled) return;
-            const me = ev as MouseEvent;
-            if (me.button !== 0) return;
-            // ここから新しい操作が始まるので、前のドラッグの痕跡は必ず捨てる。
-            // ドラッグの終わりに click が飛んでこないケース（押した rect が
-            // 再描画で作り直され、click の発火先が親要素になる）があり、
-            // 消し忘れると次の1クリックを読み飛ばしてしまうため、
-            // 下の早期 return より前で必ずリセットする。
-            dragSessionsRef.current.measureMoved = false;
-            // ドラッグ範囲選択は小節選択ツール中のみ。
-            // Shift+クリック（範囲拡張）は従来どおり click 側で処理するのでここでは始めない。
-            if (!isSelectTool || me.shiftKey) return;
-            dragSessionsRef.current.measureAnchor = absI;
-            // 拍範囲スライス（#333 段2）: 押した位置の拍もアンカーに持つ。
-            // 受け手（onBeatRangeSelect）が無ければ従来の小節丸ごとドラッグのまま
-            if (onBeatRangeSelect) {
-              const { x: lx } = clientToGroup(svg, svgRoot, me.clientX, me.clientY);
-              dragSessionsRef.current.beatAnchor = { measure: absI, beat: snappedBeatAtX(lx) };
-            }
-          });
-          const updateDragRange = (me: MouseEvent) => {
-            const anchor = dragSessionsRef.current.measureAnchor;
-            if (anchor == null) return;
-            dragSessionsRef.current.measureMoved = true;
-            const beatAnchor = dragSessionsRef.current.beatAnchor;
-            if (onBeatRangeSelect && beatAnchor) {
-              // 拍まで見た範囲。アンカーと現在位置を (小節, 拍) のタプルで比較して並べ替える
-              const { x: lx } = clientToGroup(svg, svgRoot, me.clientX, me.clientY);
-              const cur = { measure: absI, beat: snappedBeatAtX(lx) };
-              const forward = beatAnchor.measure < cur.measure
-                || (beatAnchor.measure === cur.measure && beatAnchor.beat <= cur.beat);
-              const from = forward ? beatAnchor : cur;
-              const to = forward ? cur : beatAnchor;
-              if (from.measure === to.measure && Math.abs(from.beat - to.beat) < 0.0001) return;
-              onBeatRangeSelect({
-                startMeasure: from.measure, startBeat: from.beat,
-                endMeasure: to.measure, endBeat: to.beat,
-              });
-              return;
-            }
-            // 従来: 開始小節から今カーソルがある小節までを範囲にする（右→左のドラッグでも同じ）。
-            onMeasureRangeSelect?.(Math.min(anchor, absI), Math.max(anchor, absI));
-          };
-          el.addEventListener('mouseenter', ev => updateDragRange(ev as MouseEvent));
-          // 小節内のドラッグでも拍範囲を更新する（mouseenter は小節をまたいだ時しか来ない）
-          el.addEventListener('mousemove', ev => {
-            if (dragSessionsRef.current.measureAnchor == null) return;
-            updateDragRange(ev as MouseEvent);
-          });
-        };
+        const attachMeasureSelectDrag = (el: SVGElement) => attachMeasureSelectDragListeners(el,
+          { absI, disabled, isSelectTool, svg, svgRoot, dragSessionsRef, snappedBeatAtX, onBeatRangeSelect, onMeasureRangeSelect });
 
         /**
          * 「小節を対象にするツール」の共通処理（#244 段3a）。
@@ -6282,54 +6162,9 @@ export default function PianoSystemCanvas({
             });
             hit.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();setNoteHoverHighlight(n,false);});
 
-            // タイ／松葉ドラッグ開始
-            hit.addEventListener('mousedown',e=>{
-              if(disabled||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
-              // Issue #112 で入れていた「声部2ではタイ／松葉ドラッグを受け付けない」ガードは、
-              // 確定処理（applyArc / applyHairpin）の書き込み先を声部にそろえた Issue #190 で外した。
-              // 声部の記録は dragSessionsRef.current.tieStart が持ち、確定時に終点の声部と一致するかを確かめる。
-              if(activeEvs[j]?.isRest)return;
-              e.preventDefault();
-              const n=activeVfNotes[j] as unknown as Record<string,(...a:unknown[])=>unknown>;
-              const b=n['getBoundingBox']?.() as {getY:()=>number;getH:()=>number}|undefined;
-              const noteX=(n['getAbsoluteX']?.() as number|undefined)??xl;
-              const bbY=b?.getY?.()??chordTopY;
-              const bbH=b?.getH?.()??12;
-              const evKeys=activeEvs[j].keys;
-              const avgLine=evKeys.reduce((s,k)=>s+k2l(k),0)/Math.max(evKeys.length,1);
-              const stemDir=avgLine<2?-1:1;
-              const noteY=stemDir===1?bbY+bbH+2:bbY-2;
-              // クリックしたY座標に最も近い符頭 key を特定する
-              const {y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-              const startKey=findNearestKey(evKeys,ly,stave,k2l);
-              dragSessionsRef.current.tieStart={partIndex:pi,voiceIndex:activeVoiceIndex,absoluteIndex:absI,noteIndex:j,startKey,noteX,noteY,stemDir};
-            });
-
-            // タイ／松葉ドラッグ確定
-            hit.addEventListener('mouseup',e=>{
-              if(disabled||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
-              const start=dragSessionsRef.current.tieStart;
-              tiePreviewPath.style.display='none';
-              dragSessionsRef.current.tieStart=null;
-              if(!start||start.partIndex!==pi)return;
-              // 声部をまたぐ弧は許可しない（設計メモ §4 の確定裁定・Issue #190）。
-              // 終点側の当たり判定は常にアクティブ声部から作られるので、
-              // ドラッグ中に声部を切り替えたときだけここで弾かれる。
-              if(start.voiceIndex!==activeVoiceIndex)return;
-              if(activeEvs[j]?.isRest)return;
-              if(start.absoluteIndex===absI&&start.noteIndex===j)return;
-              (e as MouseEvent).stopPropagation();
-              if(tool.mode==='hairpin'){
-                // 松葉: 開始音符から終了音符までの区間を hairpins[] に保存する
-                applyHairpin(start.voiceIndex,activeVoiceIndex,start.absoluteIndex,start.noteIndex,absI,j,tool.hairpinType);
-                return;
-              }
-              // 終点符頭を特定し、開始符頭と同じ key ならタイ、異なればスラー
-              const {y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-              const endKey=findNearestKey(activeEvs[j].keys,ly,stave,k2l);
-              const kind=start.startKey===endKey?'tie':'slur';
-              applyArc(start.voiceIndex,activeVoiceIndex,start.absoluteIndex,start.noteIndex,start.startKey,absI,j,endKey,kind);
-            });
+            // タイ／松葉ドラッグの開始と確定（editor/dragSessions/noteArcDrag.ts。#695 段6c-2）
+            attachNoteArcDragListeners(hit, { svg, svgRoot, dragSessionsRef, tiePreviewPath, tool, disabled },
+              { pi, absI, j, activeEvs, activeVfNotes, activeVoiceIndex, stave, k2l, xl, chordTopY }, { applyArc, applyHairpin });
 
             hit.addEventListener('click',e=>{
               if(disabled)return;

@@ -436,3 +436,18 @@ export function resolveNoteHitGeometry(
     snapLineForKeySelect, resolveSelectableKeyIndexAt,
   };
 }
+
+// PianoSystemCanvas のモジュール関数から物理移設（#695 段6c-2・挙動ゼロ差）
+// クリックしたY座標に最も近い和音内の key を返す（タイ開始符頭の特定に使う）
+export function findNearestKey(
+  keys: string[], localY: number, stave: Stave,
+  keyToLineFn: (k: string) => number
+): string {
+  let bestKey = keys[0] ?? 'b/4';
+  let bestDist = Infinity;
+  for (const key of keys) {
+    const dist = Math.abs(localY - stave.getYForLine(keyToLineFn(key)));
+    if (dist < bestDist) { bestDist = dist; bestKey = key; }
+  }
+  return bestKey;
+}

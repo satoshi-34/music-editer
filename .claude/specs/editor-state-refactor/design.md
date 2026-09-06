@@ -978,6 +978,23 @@ updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setText
 - PianoSystemCanvas 8,278 → 7,991 行
 - 検証: 本文の機械比較 IDENTICAL（3 関数＋ヘルパ＋移した JSDoc・定数）、tsc -b、フルテスト、lint:ratchet 基準値、独立レビュー 1 本
 
+### 段6c-2: 譜面側のドラッグリスナ 3 つを editor/dragSessions/ へ（2026-09-07）
+
+- `src/editor/dragSessions/svgTiePreview.ts` … `attachSvgDragListeners(deps)`（svg に付ける 4 リスナ: ドラッグ直後の click の読み飛ばし（capture）、
+  背景クリックでの弧の選択解除、タイ／松葉の破線プレビュー（mousemove）、後始末（mouseup）。本文 59 行。コメントブロックごと移設）
+- `src/editor/dragSessions/measureSelectDrag.ts` … `attachMeasureSelectDrag(el, deps)`（小節選択ツールのドラッグ範囲選択 #145 と拍範囲スライス
+  #333 の mousedown / mouseenter / mousemove。本文 50 行）。Canvas には同名のローカル関数を「deps を束ねて呼ぶ 2 行」として残し、
+  呼び出し 3 か所（小節背景・符頭・声部2 の当たり判定）は無変更
+- `src/editor/dragSessions/noteArcDrag.ts` … `attachNoteArcDragListeners(hit, ctx, target, writer)`（符頭のタイ／松葉ドラッグの開始 mousedown と
+  確定 mouseup。本文 48 行）。自由変数 21（束ねた値 18＋module 関数 2＋hit）を「文脈（`TiePreviewContext`＋disabled）／対象（`NoteArcDragTarget`: pi / absI / j / activeEvs /
+  activeVfNotes / activeVoiceIndex / stave / k2l / xl / chordTopY）／書き込み口（`ArcWriter`: applyArc / applyHairpin）」の 3 束に分けた
+- `src/editor/dragSessions/types.ts` … `TiePreviewContext`（svg / svgRoot / dragSessionsRef / tiePreviewPath / tool）。svg 側と符頭側が共有する文脈
+- `findNearestKey`（クリックYに最も近い和音内の key。Canvas のモジュール関数 13 行）は符頭側だけが使うので `editor/hitResolution.ts` へ移し export
+- `applyArc / applyHairpin / cancelActiveDragSessions / cancelArcDrag / updateArcDragPreview` は Canvas の state を触るので Canvas に残す。
+  これで DragSessions を読み書きするリスナは、Canvas の外（dragSessions/ 6 ファイル）に揃った
+- PianoSystemCanvas 7,991 → 7,828 行。Canvas から不要になった import（computeArcGeometry）を掃除
+- 検証: 本文の機械比較 IDENTICAL（3 関数＋findNearestKey）、tsc -b、フルテスト、lint:ratchet 基準値、独立レビュー 1 本
+
 ### 段6b-2 の先行分割: 巡回判定の依存方向整理（2026-09-06）
 
 - PR #698 の後続として、純粋判定 `clickCycleUtils.ts` と単体テストを components から
