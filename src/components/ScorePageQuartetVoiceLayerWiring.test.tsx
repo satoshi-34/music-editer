@@ -21,8 +21,7 @@ import {
   setLastOpenedWorkId,
   loadWorkAutosaveData,
 } from '../utils/storage';
-import { MAX_VOICES_PER_LAYER } from '../utils/editorLayers';
-import { describeVoiceLimitReached, requestActivePartChange } from '../utils/scoreEditorNotices';
+import { requestActivePartChange } from '../utils/scoreEditorNotices';
 import { ensembleSecondStaffPartId } from '../utils/instrumentationPartUtils';
 import type { ScoreInstrumentation } from '../types/storage';
 import type { MeasureData, PartData } from '../types/storage';
@@ -114,17 +113,6 @@ function seedQuartetWork(): string {
   return created.data.id;
 }
 
-/** jsdom は実レイアウトを持たないので、クリック座標計算のために svg の寸法を補う */
-function mockSvgLayout(svg: SVGSVGElement) {
-  const width = parseFloat(svg.getAttribute('width') ?? '0') || TEST_CONTAINER_WIDTH;
-  const height = parseFloat(svg.getAttribute('height') ?? '0') || 300;
-  svg.getBoundingClientRect = vi.fn((): DOMRect => ({
-    left: 0, top: 0, right: width, bottom: height,
-    width, height, x: 0, y: 0, toJSON: () => ({}),
-  }) as DOMRect);
-  Object.defineProperty(svg, 'width', { value: { baseVal: { value: width } }, configurable: true });
-  Object.defineProperty(svg, 'height', { value: { baseVal: { value: height } }, configurable: true });
-}
 
 /** レイヤーチップ列（aria-label で引く）の中のボタン名一覧 */
 function layerChipNames(): string[] {
@@ -140,13 +128,6 @@ function currentLayerName(): string | undefined {
   return group.querySelector('button[aria-current="true"]')?.textContent?.trim();
 }
 
-function addVoiceButton(): HTMLButtonElement {
-  const group = screen.getByRole('group', { name: '編集レイヤー切り替え' });
-  const button = Array.from(group.querySelectorAll('button'))
-    .find(b => b.textContent?.trim() === '＋');
-  expect(button).toBeTruthy();
-  return button as HTMLButtonElement;
-}
 
 // 譜面側（PianoSystemCanvas）が符頭クリック・空白クリックの入力で requestActivePartChange を呼ぶことは
 // PianoSystemCanvasSymbolCrossLayer / VoiceClickScope のテストで固定している。ここでは ScorePage 側の
