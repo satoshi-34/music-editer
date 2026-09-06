@@ -6,9 +6,22 @@ import { flushSync } from 'react-dom';
 import { resolveBelowSymbolShifts, BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX, type CollisionRect } from '../utils/symbolCollisionUtils';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
-  Renderer, Stave, StaveNote, Voice, Formatter,
-  Barline, Beam, Accidental, StaveConnector, GhostNote, VoltaType, Dot,
-  GraceNote, GraceNoteGroup, Ornament, ClefNote,
+  Renderer,
+  Stave,
+  StaveNote,
+  Voice,
+  Formatter,
+  Barline,
+  Beam,
+  Accidental,
+  StaveConnector,
+  GhostNote,
+  VoltaType,
+  Dot,
+  GraceNote,
+  GraceNoteGroup,
+  Ornament,
+  ClefNote,
 } from 'vexflow';
 import type { Tool } from './Palette';
 // NoteEvent はこのファイル内で編集頻度の高いプロパティだけを抜粋した同名の型を独自定義している。
@@ -30,6 +43,9 @@ import {
 import { computeArcGeometry, computeArcTaperGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
 import type { ClickCycleState } from '../editor/clickCycleUtils';
 import { createClickCycle } from '../editor/clickCycle';
+import { handleMeasureBackgroundClick } from '../editor/handlers/measureClick';
+import { handleVoice2NoteClick } from '../editor/handlers/voice2Click';
+import { getInputAccidental, getInputMicrotone } from '../editor/inputAccidental';
 import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY, estimatePedalBottomExtensionPx, PEDAL_TEXT_DESCENT_PX } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
 import {
@@ -49,7 +65,6 @@ import {
   describeDeletedNoteEvent,
   describeLeadingRestFill,
   describeMeasureFull,
-  describeNoTupletInMeasure,
   describePickupCleared,
   describePickupOverflow,
   describePickupSet,
@@ -58,7 +73,6 @@ import {
   describeSymbolToolUnavailable,
   describeTupletGroupPasteUnavailable,
   describeTupletNumberToggleUnavailable,
-  describeTupletNumbersToggledInMeasure,
   notifyScoreEdit,
   describeDoubleAccidentalKeySignatureUnavailable,
   describeMicrotoneKeySignatureUnavailable,
@@ -112,8 +126,7 @@ import {
   type MeasureAccidentalState,
   type KeySignature,
   type MicrotoneType,
-  type AccidentalToolKind,
-} from '../utils/noteKeyUtils';
+  } from '../utils/noteKeyUtils';
 import { applyAccidentalToEvent, applyInputAccidentalToKey, applyMicrotoneToEvent } from '../utils/accidentalUtils';
 import { placeKeySignatureAfterTimeSignature } from '../utils/staveModifierLayoutUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
@@ -131,11 +144,22 @@ import { logEditOp, logRenderPass } from '../utils/editDebugLog';
 import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, availableRenderStaffDirection, toggleRenderStaffAt, asRenderedPartIndex, type RenderedPartIndex } from '../utils/crossStaffUtils';
 import { generateCrossStaffBeams, restoreCrossStaffBeamAssignments } from '../utils/crossStaffBeamUtils';
 import {
-  CHORD_HIT_PAD, EXTRA_TOP, EXTRA_BOTTOM, INACTIVE_VOICE_COLOR,
-  ACTIVE_LAYER_BAND_COLOR, ACTIVE_LAYER_BAND_PAD, INACTIVE_LAYER_SYMBOL_OPACITY,
-  keySelectXPad, snapLine, findKeyIndexAtLine,
-  getRawPerScreenPxSafe, clientToGroup, resolveNoteHitGeometry, resolveHitAttribution,
-  type HitAttributionPolicy, type NoteClickOutcome,
+  CHORD_HIT_PAD,
+  EXTRA_TOP,
+  EXTRA_BOTTOM,
+  INACTIVE_VOICE_COLOR,
+  ACTIVE_LAYER_BAND_COLOR,
+  ACTIVE_LAYER_BAND_PAD,
+  INACTIVE_LAYER_SYMBOL_OPACITY,
+  keySelectXPad,
+  snapLine,
+  findKeyIndexAtLine,
+  getRawPerScreenPxSafe,
+  clientToGroup,
+  resolveNoteHitGeometry,
+  resolveHitAttribution,
+  type HitAttributionPolicy,
+  type NoteClickOutcome,
 } from '../editor/hitResolution';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 // 自動休符補完は #244 段5-2 で utils へ物理移設（不変条件テストから直接呼ぶため）
@@ -184,7 +208,6 @@ import {
   instantiateTupletGroup,
   planTupletGroupPasteIntoRest,
   planTupletReplacementForRest,
-  toggleAllTupletNumbersInMeasure,
   toggleTupletNumberVisibility,
   tupletGroupBeats,
   type TupletKind,
@@ -252,8 +275,19 @@ import { createSpanRenderer } from '../editor/renderPipeline/spanRenderer';
 import { OTTAVA_STAFF_GAP_PX, drawOttavaSystemEnd, type PendingOttava, type OttavaOrigin } from '../editor/renderPipeline/ottavaSystemEnd';
 import { drawSystemSpans } from '../editor/renderPipeline/systemSpans';
 import type {
-  Sel, SelectedArcSel, SelectedHairpinSel, ClickCycleTarget, ArcGeom, ArcIdentityP, NotePositionP, DragSessions, PendingClickCycle,
-  SelectionContext, LayerContext, LedgerContext, SvgContext,
+  Sel,
+  SelectedArcSel,
+  SelectedHairpinSel,
+  ClickCycleTarget,
+  ArcGeom,
+  ArcIdentityP,
+  NotePositionP,
+  DragSessions,
+  PendingClickCycle,
+  SelectionContext,
+  LayerContext,
+  LedgerContext,
+  SvgContext,
 } from '../editor/types';
 
 /* ===== 型 ===== */
@@ -439,31 +473,6 @@ function getDurationTool(tool: Tool): { duration: DurKey; isRest?: boolean; dots
   }
   const duration = tool.duration as DurKey;
   return DURATION_TOOL_VALUES.includes(duration) ? { duration, isRest: tool.isRest, dots: tool.dots } : null;
-}
-/**
- * 音価ツールに乗っている「入力時に付ける臨時記号」（Issue #470）を取り出す。
- * 休符には臨時記号が付かないので、休符ツールのときは undefined を返す。
- * OFF（未選択）のときも undefined で、そのときは音高キーが一切変わらない＝従来どおりの入力になる。
- */
-function getInputAccidental(tool: Tool): AccidentalToolKind | undefined {
-  if (!('duration' in tool) || tool.isRest) {
-    return undefined;
-  }
-  return tool.accidental;
-}
-/**
- * 同じく、音価ツールに乗っている微分音（四分音）を取り出す（Issue #548 の統合で属性になった）。
- * 通常の臨時記号とは排他なので、両方が同時に入ることはない。
- */
-function getInputMicrotone(tool: Tool): MicrotoneType | undefined {
-  if (!('duration' in tool) || tool.isRest) {
-    return undefined;
-  }
-  return tool.microtone;
-}
-/** 臨時記号ツール（♯/♭/♮/𝄪/♭♭・¼♯/¼♭ のいずれか）を持っているか */
-function hasAccidentalTool(tool: Tool): boolean {
-  return !!getInputAccidental(tool) || !!getInputMicrotone(tool);
 }
 // 付点1個=1.5倍、複付点(2個)=1.75倍。休符差し込み判定・拍数計算で共通利用する
 const dotBeatsMultiplier = (dots?: 1 | 2) => (dots === 1 ? 1.5 : dots === 2 ? 1.75 : 1);
@@ -6459,119 +6468,16 @@ export default function PianoSystemCanvas({
         });
         ir.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();});
         ir.addEventListener('click',e=>{
-          if(disabled)return;
-          // 小節選択ツール中、または（ツールを問わず）Shift+クリックのときは小節選択にする。
-          // Shift+クリックを他ツールでも受けるのは、コピー＆ペーストのためだけに
-          // ツールを持ち替えなくて済むようにするため（Issue #145）。
-          if (isSelectTool || (e as MouseEvent).shiftKey) {
-            if (dragSessionsRef.current.measureMoved) {
-              // 直前のドラッグで範囲を決めたときは、そのあとに来る click で
-              // 単一小節へ戻してしまわないよう1回だけ読み飛ばす。
-              dragSessionsRef.current.measureMoved = false;
-              return;
-            }
-            onMeasureSelect?.(absI, (e as MouseEvent).shiftKey);
-            return;
-          }
-          setSelectedArc(null);
-          setSelectedHairpin(null);
-          // 小節単位のツール（タイ/松葉スキップ・リピート・終止括弧・小節メタ5種）は
-          // 音符クリック側と共通のディスパッチャで処理する（#244 段3a）
-          if (handleMeasureScopedTool(e) === 'handled') return;
-          if('mode' in tool&&tool.mode==='dynamic'){
-            // 強弱記号は既存の音符へ付ける情報なので、背景クリックでは何もしない。
-            return;
-          }
-          if('mode' in tool&&(tool.mode==='symbolAdjustResize'||tool.mode==='symbolAdjustOffset')){
-            // 汎用サイズ・位置調整も既存の音符にのみ行う。
-            return;
-          }
-          if('mode' in tool&&tool.mode==='tupletNumberToggle'){
-            // 小節の背景クリックは、その小節・アクティブ声部の全連符グループを一括で切り替える（Issue #324）。
-            // 三連符が続く曲（月光など）ではグループ単位（#294）だとクリック回数が多すぎるため。
-            // 背景クリックでも音符は置かない点は従来どおり。
-            const measureNow=score[absI];
-            const preview=measureNow?toggleAllTupletNumbersInMeasure(getVoiceEvents(measureNow, activeVoiceIndex)):null;
-            if(!preview){
-              // 連符が無い小節では譜面を書き換えず、理由だけ伝える（#318「行き止まりは喋る」）。
-              // ここで withVoiceEventsUpdated を通すと、声部2モードのときに
-              // 中身の無い voices[1] が生まれてしまう（#112 の教訓）。
-              notifyScoreEdit(describeNoTupletInMeasure());
-              return;
-            }
-            setScore(prev=>{
-              const next=prev.map(cloneMeasureData);
-              if(absI>=next.length)return prev;
-              const currentEvents=getVoiceEvents(next[absI], activeVoiceIndex);
-              const toggled=toggleAllTupletNumbersInMeasure(currentEvents);
-              if(!toggled)return prev;
-              next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, ()=>toggled.events);
-              return next;
-            });
-            notifyScoreEdit(describeTupletNumbersToggledInMeasure(preview.groupCount, preview.hidden));
-            return;
-          }
-          if('mode' in tool&&tool.mode==='crossStaffToggle'){
-            // 段またぎ表示の切替（Issue #310）も既存の音符にのみ行う。
-            // 背景クリックで音符を置くと「モードを選んだだけで譜面が変わった」ことになる。
-            return;
-          }
-          if('mode' in tool&&tool.mode==='textElement'){
-            // テキスト要素も既存の音符へ付ける情報なので、背景クリックでは何もしない。
-            return;
-          }
-          const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-          // 臨時記号ツール中の背景クリック（Issue #548 の統合で「音符を置く」に変わった）。
-          // 調号領域だけは先に判定しないと、先頭段の調号の上に音符が生えて
-          // 調号変更の経路が音符入力に食われる（設計メモ §3-3・受入ケース11）。
-          if(hasAccidentalTool(tool)){
-            if(i===0&&lx>=firstStaveKeySignatureHitBounds.left&&lx<=firstStaveKeySignatureHitBounds.right){
-              const keySignatureAccidental = getInputAccidental(tool);
-              if(!keySignatureAccidental){
-                // 微分音（¼♯・¼♭）は調号には存在しない。ここで挿入へ流すと調号の上に
-                // 音符が生えるので、理由だけ伝えて消費する（#318「行き止まりは喋る」）
-                notifyScoreEdit(describeMicrotoneKeySignatureUnavailable());
-                return;
-              }
-              // 臨時記号ツール中の背景クリックは、調号領域なら調号変更へ回す。
-              // クリックされた段に固有の調号があれば、それを基準にシフトする。
-              // こうすると記譜音モードのときに「画面で見えている調号」に対する
-              // 操作になり、ユーザーの期待通りに動く。
-              const baseKey = partKeyForAccidental;
-              const nextKey = shiftKeySignatureByAccidental(baseKey, keySignatureAccidental);
-              console.info('[PianoSystemCanvas] 調号領域クリック', {
-                tool: keySignatureAccidental,
-                partIndex: pi,
-                current: baseKey,
-                next: nextKey,
-                x: lx,
-                bounds: firstStaveKeySignatureHitBounds,
-              });
-              // 調号が変わらないときは書き換え・履歴を積まない（Issue #423。理由は上の同じ判定を参照）
-              if (nextKey !== baseKey) {
-                onKeySignatureChange?.(nextKey, pi);
-              } else if (keySignatureAccidental === 'doubleSharp' || keySignatureAccidental === 'doubleFlat') {
-                // 𝄪・𝄫 は調号に存在しないため必ずここへ来る。無言だと「効かない」ようにしか
-                // 見えないので、次の一手を案内する（#318・#430 round1 P2）
-                notifyScoreEdit(describeDoubleAccidentalKeySignatureUnavailable(keySignatureAccidental === 'doubleSharp' ? '##' : 'bb'));
-              }
-              // 調号領域のクリックは調号変更で終わり。ここで抜けないと、
-              // 同じクリックで音符まで生えてしまう（受入ケース11）
-              return;
-            }
-            // 調号領域の外は、統合後は「その記号付きの音符を置く」ので下の挿入へ流す
-            // （統合前は無反応だった。設計メモ §3-5 の変更点D）
-          }
-          // 小節背景クリックは常にアクティブ声部への挿入。
-          // 声部2の既存音符の真上をクリックした場合も、doInsert 内の位置判定で
-          // その音符の直前/直後に挿入されるので違和感はない
-          // （個別音符の選択・和音追加は下の vf-note-hit 側で処理する）。
-          // レイヤー明示選択中は、クリックした帯ではなく**選択レイヤーのパート**の
-          // doInsert へ委譲する（裁定②案A・2026-08-23）。音高はそのパートの五線を
-          // 基準に計算されるので、左手の帯の位置でクリックした低い右手の音は
-          // 右手五線の下の加線として正しく入る（月光 m5 の三連符のユースケース）
-          const insertTargetPi = activeLayerPartIndex ?? pi;
-          (doInsertByPart[insertTargetPi] ?? doInsert)(lx, ly, pi);
+          // 本体は handleMeasureBackgroundClick（#695 段6b-3）。閉包で参照していたローカルを
+          // 文脈・対象・ツール・書き込み口に分けて渡す（挙動ゼロ差の物理移設）
+          handleMeasureBackgroundClick(
+            { svg: svgContext, selection: selectionContext, layer: layerContext },
+            { pi, absI, i, score, partKeyForAccidental, firstStaveKeySignatureHitBounds },
+            { tool, isSelectTool, disabled: !!disabled },
+            { onMeasureSelect, onKeySignatureChange, handleMeasureScopedTool, setScore, doInsert, doInsertByPart },
+            dragSessionsRef,
+            e as MouseEvent,
+          );
         });
         svgRoot.appendChild(ir);
         if (getInputAccidental(tool) && i === 0) {
@@ -6707,23 +6613,15 @@ export default function PianoSystemCanvas({
               // 出したままだと「ここに音符が入る」と誤解させてしまう。
               rect.addEventListener('mousemove',()=>{hideGuide();hideChordGuide();});
               rect.addEventListener('click',e=>{
-                if(disabled)return;
-                e.stopPropagation();
-                const me=e as MouseEvent;
-                // 小節選択ツール中と Shift+クリックは、アクティブ声部の符頭と同じく小節選択のまま
-                if(isSelectTool||me.shiftKey){
-                  if(dragSessionsRef.current.measureMoved){
-                    dragSessionsRef.current.measureMoved=false;
-                    return;
-                  }
-                  onMeasureSelect?.(absI,me.shiftKey);
-                  return;
-                }
-                // 同じ場所の再クリックなら、奥に隠れている対象（別の声部の符頭・スラー等）へ譲る
-                if(tryClickCycle(cycleId,me.clientX,me.clientY))return;
-                switchVoiceAndSelect(me.clientX,me.clientY);
-                // 次に同じ場所を押したら奥の候補へ進めるよう、選んだことを覚えておく
-                armClickCycleFor(cycleId,me.clientX,me.clientY);
+                // 本体は handleVoice2NoteClick（#695 段6b-3・挙動ゼロ差の物理移設）
+                handleVoice2NoteClick(
+                  clickCycle,
+                  { absI, cycleId, switchVoiceAndSelect },
+                  { isSelectTool, disabled: !!disabled },
+                  { onMeasureSelect },
+                  dragSessionsRef,
+                  e as MouseEvent,
+                );
               });
               svgRoot.appendChild(rect);
             });

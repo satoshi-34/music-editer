@@ -607,7 +607,7 @@ effect 側で移設前と同じ名前に分割代入する。これで本文は 
 - `PendingClickCycle`（clickCyclePendingRef の中身の型）は spanRenderer.ts で定義した。PianoSystemCanvas 側の
   インライン型と重複しているので、段6b で `src/editor/types.ts` へ寄せるときに片方へ統一する
 - 「何を閉包から受けているか」は TypeScript の AST で自由変数を機械的に列挙して決めた
-  （`scratchpad/free-ids.cjs`。手で数えると取りこぼす）
+  （`scripts/free-ids.cjs`。手で数えると取りこぼす）
 
 ### 段6a の実装記録（2026-09-06）
 移したもの（本文は無変更・行数は移設前の PianoSystemCanvas 内）:
@@ -676,7 +676,7 @@ live ではない。いまの閉包が捕まえている値と同一なのでゼ
 残る変数は「対象」（どの小節・どの音符か: `pi / absI / j / activeEvs / stave / clefHere …`）と
 「ツール」（`tool` と、そこから導いた `isSelectTool` など）と「書き込み口」（`setScoreFor / doInsert / updateActiveEvent`）。
 これらは**ハンドラごとの引数**として明示する（文脈に混ぜない。混ぜると「どのハンドラが何を書くか」が見えなくなる）。
-符頭クリックが 10 回読む `dragSessionsRef` も、LedgerContext に隠さず `drag` として明示引数に置く
+符頭クリックが読む `dragSessionsRef`（6b-2 実測 2 回。当初見込みは 10 回） も、LedgerContext に隠さず `drag` として明示引数に置く
 （「クリック処理がドラッグ状態を読む」ことを署名に残す。段6c で dragSessions へ寄せる前提）。
 
 段6a の Deps を文脈で書き直したときの引数の数（宣言で数えた見込み。6b-2 で実測に置換する）:
@@ -685,7 +685,7 @@ live ではない。いまの閉包が捕まえている値と同一なのでゼ
 | SpanRendererDeps | 16 | setter 3 | 2 | 4 | 4 | 2 | parts 1 | **6**（selection / layer / ledger / cycle / svg / parts）— 6b-2 で実測どおり |
 | SystemSpansDeps | 19 | 値 2＋setter 3 | 3 | 2 | 3 | 1 | spans / parts / measuresPerSystem / startMeasureIndex / incomingArcIndex 5 | **10**（見込み 9 は `spans` の数え漏れ。対象 3 つは束に混ぜず引数のまま） |
 
-符頭クリック（54 変数）の内訳は 6b-2 の PR で `free-ids.cjs` の出力を「文脈で吸収 / 対象 / ツール / 書き込み口 / それ以外」に分類して表にし、6b-4 の審査基準にする。
+符頭クリック（見込み 54・6b-2 実測 55 変数）の内訳は 6b-2 の PR で `free-ids.cjs` の出力を「文脈で吸収 / 対象 / ツール / 書き込み口 / それ以外」に分類して表にし、6b-4 の審査基準にする。
 
 ### ハンドラの形
 ```ts
@@ -709,12 +709,12 @@ export function handleNoteClick(
 | 6b-1 | `src/editor/types.ts` を新設し、純データ型（Sel / SelectedArcSel / SelectedHairpinSel / ClickCycleTarget / ArcGeom / ArcIdentityP / NotePositionP / DragSessions / PendingClickCycle）を寄せる。renderPipeline の import 先を types へ | 型の移動のみ・tsc |
 | 6b-2 | `src/editor/clickCycle.ts`（createClickCycle）を切り出し、文脈 3 つ（Selection / Layer / Ledger）の型を types.ts に置き、描画 effect 冒頭で 1 回だけ作る。段6a の Deps を文脈で書き直す（引数 16→6、19→9 の見込み。実測して表を更新） | 本文無変更・引数の束ね直しのみ |
 | （並行・別 PR） | `PartConfig`（props 型）は PianoSystemCanvas に残す。`RenderCollectors`（描画台帳の塊）は段6c で `LedgerContext` の内側へ移す。`ClefType` の `utils/clefUtils` への移設は別の小 PR（import 先の一括置換） | — |
-| 6b-3 | 小節背景クリック（115 行）と声部2クリック（19 行）を `handlers/measureClick.ts` / `handlers/voice2Click.ts` へ。対象・ツール・書き込み口を引数化 | 本文無変更・AST で自由変数を列挙 |
+| 6b-3 | 小節背景クリック（listener 全体 115 行・本文 113 行）と声部2クリック（19 行・本文 17 行）を `handlers/measureClick.ts` / `handlers/voice2Click.ts` へ。対象・ツール・書き込み口を引数化 | 本文無変更・AST で自由変数を列挙 |
 | 6b-4〜 | 符頭クリック（744 行）をモードごとに割って移す。1 PR で 2〜3 モード | 各モードの分岐は既に `NoteClickOutcome` を返す独立した塊 |
 | 6b-末 | 符頭の mousedown/mouseup・拍範囲ドラッグ → 段6c（dragSessions）へ引き継ぎ | — |
 
 ### 進め方の約束（段6a と同じ）
-- 自由変数は `scratchpad/free-ids.cjs`（TypeScript AST）で列挙してから引数を決める
+- 自由変数は `scripts/free-ids.cjs`（TypeScript AST）で列挙してから引数を決める
 - 各 PR: tsc・フルテスト・lint:ratchet 基準値・独立レビュー 1 本（型だけの段）〜2 本（ハンドラを動かす段）
 - 段6b-3 以降は `PianoSystemCanvas` を触る ai-ready（#645 #653 #657 #693 ほか）を一時的に外す
 
@@ -752,7 +752,7 @@ export function handleNoteClick(
   段6c で移すまで PianoSystemCanvas から `import type` で借りる（systemSpans.ts が既にしている型だけの逆依存）。
 - 描画 effect は collectors を分割代入した直後に文脈 4 つ（svg / selection / layer / ledger）を 1 回だけ作り、
   `createSpanRenderer` と `drawSystemSpans` へ束で渡す。両関数の冒頭で束から従来のローカル名へ展開するので、
-  それ以降の本文は束ね直し前とバイト一致（機械比較: spanRenderer 274 行・systemSpans 329 行とも IDENTICAL）。
+  それ以降の本文は束ね直し前とバイト一致（機械比較: 展開行の次から末尾まで、spanRenderer 273 行・systemSpans 328 行とも IDENTICAL）。
 - effect 側の `prepareClickCycle / commitClickCycle` の分割代入は不要になったので外した（spanRenderer が束経由で使う）。
   これを残すと lint:ratchet が 2 件増える。
 - 実測: SpanRendererDeps 16→6、SystemSpansDeps 19→10（上表を更新）。
@@ -764,7 +764,7 @@ export function handleNoteClick(
   重なり対象の再クリック巡回は既存の配線テスト（PianoSystemCanvasClickCycle）で確認。確認後の松葉は元に戻した。
 
 #### 符頭クリック（744 行・6965〜7708）の自由変数分類（6b-4 の審査基準）
-`scratchpad/free-ids.cjs`（TypeScript AST）で列挙。コンポーネント内ローカル 59 件のうち `T` / `Parameters` /
+`scripts/free-ids.cjs`（TypeScript AST）で列挙。コンポーネント内ローカル 59 件のうち `T` / `Parameters` /
 `NonNullable` / `const` は型・構文の誤検出なので実質 **55 件**（見込み 54）。ほかに import 42・モジュール関数 7。
 
 | 分類 | 名前（参照回数） | 件数 |
@@ -781,6 +781,27 @@ export function handleNoteClick(
 モードごとに決める。書き込み口 13 件は多いので、6b-4 では `NoteWriter` を「譜面を書く（setScoreFor / doInsert /
 updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setTextEditState / openSymbolAdjustEditor）」の
 2 束に分ける案を先に検討する。
+
+### 段6b-3: 小節背景クリックと声部2クリックを handlers/ へ（2026-09-06）
+
+- `src/editor/handlers/measureClick.ts` … `handleMeasureBackgroundClick(ctx, target, tool, writer, drag, e)`（本文 113 行・移設前と同一）
+- `src/editor/handlers/voice2Click.ts` … `handleVoice2NoteClick(cycle, target, tool, writer, drag, e)`（本文 17 行・同一）
+- `src/editor/inputAccidental.ts` … `getInputAccidental / getInputMicrotone / hasAccidentalTool`（Canvas のモジュール関数 3 つを
+  移設。中身は不変。ハンドラから Canvas を実行時 import すると循環になるため先に外へ出した）
+- 引数の分け方（§17 の約束どおり）:
+  | 束 | 小節背景クリック（自由変数 23） | 声部2クリック（自由変数 10） |
+  | --- | --- | --- |
+  | 文脈 | svg / selection（setSelectedArc・setSelectedHairpin）/ layer（activeVoiceIndex・activeLayerPartIndex） | cycle（tryClickCycle・armClickCycleFor） |
+  | 対象 | pi・absI・i・score（部分譜のスナップショット）・partKeyForAccidental・firstStaveKeySignatureHitBounds | absI・cycleId・switchVoiceAndSelect（符頭ごとの閉包） |
+  | ツール | tool・isSelectTool・disabled | isSelectTool・disabled |
+  | 書き込み口 | onMeasureSelect・onKeySignatureChange・handleMeasureScopedTool・setScore・doInsert・doInsertByPart | onMeasureSelect |
+  | ドラッグ | `drag`（dragSessionsRef を明示引数に） | 同左 |
+- Canvas 側の `addEventListener('click', …)` は残し、中で 1 回呼ぶだけにした（呼び出し位置・登録順・stopPropagation の有無は不変）。
+  `disabled` は props の分割代入で既定値 false が付いた `boolean`。`!!disabled` は型を揃えるだけで真偽は不変
+- 検証: 本文の機械比較 IDENTICAL（2 ハンドラ・ヘルパ 3 関数は export 付与のみ）、tsc、フルテスト、lint:ratchet 基準値、
+  ブラウザ（dev コンテナの Vite）: 4分音符ツールで満杯の小節の背景をクリック →「この小節は拍がいっぱいで置けません」
+  の通知（移設した挿入経路と #318 の通知が動作）、Shift+クリック → 小節 3 が選択（移設した小節選択経路が動作）。
+  コンソールエラー無し。画像は `docs/qa/evidence/handlers-6b3-measure-select.png`。譜面は変更していない
 
 ### 段6b-2 の先行分割: 巡回判定の依存方向整理（2026-09-06）
 

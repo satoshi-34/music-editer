@@ -849,8 +849,16 @@ README の「使い方」は取扱説明として残しつつ、そこに混じ�
   （types.ts の SelectionContext の注意書き）。
 - 最小の自動確認: `npx vitest --run src/components/PianoSystemCanvasClickCycle.test.tsx src/components/PianoSystemCanvasDragCancel.test.tsx`
   に加えて `npx tsc --noEmit` と `npm run lint:ratchet`（分割代入の残骸は未使用変数として基準値を超える）。
-- ハンドラの自由変数を数えるときは `node scratchpad/free-ids.cjs src/components/PianoSystemCanvas.tsx <開始行>`
+- ハンドラの自由変数を数えるときは `node scripts/free-ids.cjs src/components/PianoSystemCanvas.tsx <開始行>`
   （開始行に `addEventListener` があれば終端は自動で拾う）。
+
+### クリックハンドラ（editor/handlers）を変更したときの確認
+
+- 小節背景クリックは `src/editor/handlers/measureClick.ts`、他声部の符頭クリックは `src/editor/handlers/voice2Click.ts`。
+  Canvas は `addEventListener` の中でこれらを 1 回呼ぶだけ。引数は「文脈（types.ts）・対象・ツール・書き込み口・drag」の順
+- 最小の自動確認: `npx vitest --run src/components/PianoSystemCanvasMeasureSelect.test.tsx src/components/PianoSystemCanvasTupletHideNumber.test.tsx src/components/PianoSystemCanvasClickCycle.test.tsx`
+- ブラウザ: 音価ツールで小節の空き部分をクリックして音符が入ること、小節選択ツール（または Shift+クリック）で
+  小節が選ばれること、別声部の符頭クリックで声部が切り替わることを確認する
 
 ### 再クリック巡回を変更したときの確認
 
