@@ -55,24 +55,24 @@ describe('レイアウトタブの3グループ化とリセットメニュー（
   // ファイル内で個別に延長する（ScorePageToolbarCollapse.test.tsx と同じ方針）。
   const MOUNT_HEAVY_TIMEOUT_MS = 60000;
 
-  it('スライダーが「用紙と余白 / 譜面の密度 / タイトル」の3グループに分かれている', () => {
+  it('数値入力が「用紙と余白 / 譜面の密度 / タイトル」の3グループに分かれている', () => {
     render(<ScorePage />);
     openLayoutTab();
 
     const paperGroup = screen.getByRole('group', { name: '用紙と余白' });
-    expect(within(paperGroup).getByRole('slider', { name: /余白\(左右\)/ })).toBeTruthy();
-    expect(within(paperGroup).getByRole('slider', { name: /余白\(上\)/ })).toBeTruthy();
-    expect(within(paperGroup).getByRole('slider', { name: /余白\(下\)/ })).toBeTruthy();
+    expect(within(paperGroup).getByRole('spinbutton', { name: /余白\(左右\)/ })).toBeTruthy();
+    expect(within(paperGroup).getByRole('spinbutton', { name: /余白\(上\)/ })).toBeTruthy();
+    expect(within(paperGroup).getByRole('spinbutton', { name: /余白\(下\)/ })).toBeTruthy();
 
     const densityGroup = screen.getByRole('group', { name: '譜面の密度' });
-    expect(within(densityGroup).getByRole('slider', { name: /音符の大きさ/ })).toBeTruthy();
-    expect(within(densityGroup).getByRole('slider', { name: /小節幅の均等さ/ })).toBeTruthy();
-    expect(within(densityGroup).getByRole('slider', { name: /段の間隔/ })).toBeTruthy();
-    expect(within(densityGroup).getByRole('slider', { name: /パート間隔/ })).toBeTruthy();
+    expect(within(densityGroup).getByRole('spinbutton', { name: /音符の大きさ/ })).toBeTruthy();
+    expect(within(densityGroup).getByRole('spinbutton', { name: /小節幅の均等さ/ })).toBeTruthy();
+    expect(within(densityGroup).getByRole('spinbutton', { name: /段の間隔/ })).toBeTruthy();
+    expect(within(densityGroup).getByRole('spinbutton', { name: /パート間隔/ })).toBeTruthy();
 
     const titleGroup = screen.getByRole('group', { name: 'タイトル' });
-    expect(within(titleGroup).getByRole('slider', { name: /タイトル余白\(上\)/ })).toBeTruthy();
-    expect(within(titleGroup).getByRole('slider', { name: /タイトル余白\(下\)/ })).toBeTruthy();
+    expect(within(titleGroup).getByRole('spinbutton', { name: /タイトル余白\(上\)/ })).toBeTruthy();
+    expect(within(titleGroup).getByRole('spinbutton', { name: /タイトル余白\(下\)/ })).toBeTruthy();
 
     // 見出しそのものが画面に出ていること（グループの区切りが読めること）
     expect(within(paperGroup).getByText('用紙と余白')).toBeTruthy();
@@ -80,17 +80,22 @@ describe('レイアウトタブの3グループ化とリセットメニュー（
     expect(within(titleGroup).getByText('タイトル')).toBeTruthy();
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
-  it('グループ分け後もスライダーは従来どおり値が変わり localStorage へ保存される', () => {
+  it('グループ分け後も数値入力は従来どおり値が変わり localStorage へ保存される', () => {
     render(<ScorePage />);
     openLayoutTab();
 
-    const sideMargin = screen.getByRole('slider', { name: /余白\(左右\)/ }) as HTMLInputElement;
+    const sideMargin = screen.getByRole('spinbutton', { name: /余白\(左右\)/ }) as HTMLInputElement;
+    // Issue #578 round1 P2 以降、キーボードで打った値が反映されるのは
+    // Enter・フォーカスを外したときの確定だけ（打っている途中の中間値は譜面に当てない）。
+    // そのため、打ったあとに blur を足して「欄から離れた」ところまで再現する。
     fireEvent.change(sideMargin, { target: { value: '18' } });
+    fireEvent.blur(sideMargin);
     expect(sideMargin.value).toBe('18');
     expect(localStorageMock.getItem('score-page-margin-side')).toBe('18');
 
-    const titleBottom = screen.getByRole('slider', { name: /タイトル余白\(下\)/ }) as HTMLInputElement;
+    const titleBottom = screen.getByRole('spinbutton', { name: /タイトル余白\(下\)/ }) as HTMLInputElement;
     fireEvent.change(titleBottom, { target: { value: '9' } });
+    fireEvent.blur(titleBottom);
     expect(titleBottom.value).toBe('9');
     expect(localStorageMock.getItem('score-title-margin-bottom')).toBe('9');
   }, MOUNT_HEAVY_TIMEOUT_MS);
@@ -109,7 +114,7 @@ describe('レイアウトタブの3グループ化とリセットメニュー（
     fireEvent.change(zoom, { target: { value: '120' } });
     expect(localStorageMock.getItem('score-view-zoom')).toBe('1.2');
 
-    // タブを移動しても同じスライダーが残り、値も保たれる
+    // タブを移動しても同じスライダーが残り、値も保たれる（ズームだけはスライダーのまま。#578）
     openLayoutTab();
     expect((screen.getByRole('slider', { name: /画面表示のズーム/ }) as HTMLInputElement).value).toBe('120');
   }, MOUNT_HEAVY_TIMEOUT_MS);
@@ -150,8 +155,9 @@ describe('レイアウトタブの3グループ化とリセットメニュー（
     render(<ScorePage />);
     openLayoutTab();
 
-    const sideMargin = screen.getByRole('slider', { name: /余白\(左右\)/ }) as HTMLInputElement;
+    const sideMargin = screen.getByRole('spinbutton', { name: /余白\(左右\)/ }) as HTMLInputElement;
     fireEvent.change(sideMargin, { target: { value: '25' } });
+    fireEvent.blur(sideMargin);
     expect(sideMargin.value).toBe('25');
 
     openResetMenu();
@@ -160,6 +166,6 @@ describe('レイアウトタブの3グループ化とリセットメニュー（
     // 押した項目のメニューは閉じ、値は既定へ戻る
     expect(screen.queryByRole('group', { name: 'リセット' })).toBeNull();
     // 既定値は DEFAULT_PAGE_SIDE_MARGIN_MM（14mm）
-    expect((screen.getByRole('slider', { name: /余白\(左右\)/ }) as HTMLInputElement).value).toBe('14');
+    expect((screen.getByRole('spinbutton', { name: /余白\(左右\)/ }) as HTMLInputElement).value).toBe('14');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

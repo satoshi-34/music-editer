@@ -20,6 +20,7 @@ import SaveLoadButtons, { type ExportStatus } from './SaveLoadButtons';
 import SystemLayoutPanel from './SystemLayoutPanel';
 import LayoutGapDragBand from './LayoutGapDragBand';
 import NotationSizeDragHandle from './NotationSizeDragHandle';
+import LayoutNumberInput from './LayoutNumberInput';
 import WorkListPanel from './WorkListPanel';
 import PlaybackControls, {
   INSTRUMENT_GROUPS,
@@ -7130,74 +7131,59 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                   title={`ページの左右余白です。本文幅（小節を並べる幅）もこの値に合わせて自動で連動します。既定は${DEFAULT_PAGE_SIDE_MARGIN_MM}mmです`}
                 >
                   余白(左右)
-                  {/* このタブのスライダー・数値入力には aria-label を明示する（Issue #563）。
+                  {/* このタブの数値入力には aria-label を明示する（Issue #563）。
                       <label> で囲んでいるので名前が付いていないわけではないが、その場合の
-                      アクセシブルな名前は「ラベル文字＋現在値」（例: 「余白(左右)14mm」）になり、
-                      値が変わるたびに名前まで変わってしまう。スクリーンリーダーは値を別に読むので、
+                      アクセシブルな名前は「ラベル文字＋単位」（例: 「余白(左右)mm」）になり、
+                      ラベルだけを頼りに探せない。スクリーンリーダーは値と単位を別に読むので、
                       名前は固定のラベルだけにしておく方が分かりやすい。 */}
-                  <input
-                    type="range"
+                  <LayoutNumberInput
+                    label="余白(左右)"
+                    value={pageMarginSideMm}
                     min={PAGE_MARGIN_SIDE_MIN_MM}
                     max={PAGE_MARGIN_SIDE_MAX_MM}
-                    step={1}
-                    value={pageMarginSideMm}
-                    onChange={e => {
-                      const v = Math.max(PAGE_MARGIN_SIDE_MIN_MM, Math.min(PAGE_MARGIN_SIDE_MAX_MM, Number(e.target.value)));
-                      if (!isNaN(v)) {
-                        setPageMarginSideMm(v);
-                        localStorage.setItem(PAGE_MARGIN_SIDE_KEY, String(v));
-                      }
+                    unit="mm"
+                    onCommit={v => {
+                      setPageMarginSideMm(v);
+                      localStorage.setItem(PAGE_MARGIN_SIDE_KEY, String(v));
                     }}
-                    style={{ width: 70 }}
-                    aria-label="余白(左右)"
+                    onNotice={notifyScoreEdit}
                   />
-                  <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginSideMm}mm</span>
                 </label>
                 <label
                   style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
                   title={`ページの上余白です。1ページに入る段数の上限は上下余白の合計値に合わせて自動で連動します。既定は${DEFAULT_PAGE_MARGIN_TOP_MM}mmです`}
                 >
                   余白(上)
-                  <input
-                    type="range"
+                  <LayoutNumberInput
+                    label="余白(上)"
+                    value={pageMarginTopMm}
                     min={PAGE_MARGIN_VERTICAL_MIN_MM}
                     max={PAGE_MARGIN_VERTICAL_MAX_MM}
-                    step={1}
-                    value={pageMarginTopMm}
-                    onChange={e => {
-                      const v = Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, Number(e.target.value)));
-                      if (!isNaN(v)) {
-                        setPageMarginTopMm(v);
-                        localStorage.setItem(PAGE_MARGIN_TOP_KEY, String(v));
-                      }
+                    unit="mm"
+                    onCommit={v => {
+                      setPageMarginTopMm(v);
+                      localStorage.setItem(PAGE_MARGIN_TOP_KEY, String(v));
                     }}
-                    style={{ width: 70 }}
-                    aria-label="余白(上)"
+                    onNotice={notifyScoreEdit}
                   />
-                  <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginTopMm}mm</span>
                 </label>
                 <label
                   style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
                   title={`ページの下余白です。1ページに入る段数の上限は上下余白の合計値に合わせて自動で連動します。既定は${DEFAULT_PAGE_MARGIN_BOTTOM_MM}mmです`}
                 >
                   余白(下)
-                  <input
-                    type="range"
+                  <LayoutNumberInput
+                    label="余白(下)"
+                    value={pageMarginBottomMm}
                     min={PAGE_MARGIN_VERTICAL_MIN_MM}
                     max={PAGE_MARGIN_VERTICAL_MAX_MM}
-                    step={1}
-                    value={pageMarginBottomMm}
-                    onChange={e => {
-                      const v = Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, Number(e.target.value)));
-                      if (!isNaN(v)) {
-                        setPageMarginBottomMm(v);
-                        localStorage.setItem(PAGE_MARGIN_BOTTOM_KEY, String(v));
-                      }
+                    unit="mm"
+                    onCommit={v => {
+                      setPageMarginBottomMm(v);
+                      localStorage.setItem(PAGE_MARGIN_BOTTOM_KEY, String(v));
                     }}
-                    style={{ width: 70 }}
-                    aria-label="余白(下)"
+                    onNotice={notifyScoreEdit}
                   />
-                  <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginBottomMm}mm</span>
                 </label>
               </div>
               {/* 「譜面の密度」= 紙の大きさは変えずに、音符と段をどれだけ詰めるかを決めるグループ。
@@ -7209,36 +7195,29 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                   title="音符・記号そのものの大きさです。画面表示だけでなく印刷結果にも反映されます（『画面表示のズーム』とは異なり印刷にも影響します）。既定は楽譜の種類により異なります（単旋律・ピアノは150%、弦楽四重奏・編成譜は100%）"
                 >
                   音符の大きさ
-                  <input
-                    type="range"
+                  <LayoutNumberInput
+                    label="音符の大きさ"
+                    // 欄では 80〜200(%) で扱い、内部では 0.8〜2.0 の倍率として保持する
+                    value={Math.round(notationSizeMultiplier * 100)}
                     min={80}
                     max={200}
                     step={5}
-                    value={Math.round(notationSizeMultiplier * 100)}
-                    // 1回のつまみ操作＝Undo 1件にするための区切り。押し直すたびに「まだ履歴を
-                    // 積んでいない」へ戻し、実際に値が変わる最初の1回だけ積む（角ハンドルと同じ流儀）。
-                    // キーボードの矢印は押しっぱなし（repeat）を1件にまとめる
-                    onPointerDown={() => { notationSizeHistoryPushedRef.current = false; }}
-                    onKeyDown={e => { if (!e.repeat) notationSizeHistoryPushedRef.current = false; }}
-                    onChange={e => {
-                      // スライダーは 80〜200(%) で扱い、内部では 0.8〜2.0 の倍率として保持する
-                      const v = Number(e.target.value) / 100;
-                      if (!isNaN(v)) {
-                        // 音符の大きさは Undo/Redo のスナップショットに入っている（Issue #571）。
-                        // ここで履歴を積まないと、スライダーで変えた値が無関係な Undo で
-                        // 古い値へ戻ってしまう（スナップショットは常に「その時点の大きさ」を持つため）
-                        if (!notationSizeHistoryPushedRef.current) {
-                          notationSizeHistoryPushedRef.current = true;
-                          pushHistory();
-                        }
-                        applyNotationSizeMultiplier(v);
+                    unit="%"
+                    // 1回の編集（欄にフォーカスしてから外れるまで）＝Undo 1件にするための区切り。
+                    // 入るたびに「まだ履歴を積んでいない」へ戻し、実際に値が変わる最初の1回だけ積む
+                    onEditSessionStart={() => { notationSizeHistoryPushedRef.current = false; }}
+                    onCommit={percent => {
+                      // 音符の大きさは Undo/Redo のスナップショットに入っている（Issue #571）。
+                      // ここで履歴を積まないと、この欄で変えた値が無関係な Undo で
+                      // 古い値へ戻ってしまう（スナップショットは常に「その時点の大きさ」を持つため）
+                      if (!notationSizeHistoryPushedRef.current) {
+                        notationSizeHistoryPushedRef.current = true;
+                        pushHistory();
                       }
+                      applyNotationSizeMultiplier(percent / 100);
                     }}
-                    style={{ width: 90 }}
-                    aria-label="音符の大きさ"
+                    onNotice={notifyScoreEdit}
                   />
-                  {/* 現在値（%）。既定は楽譜種別により異なる（単旋律・ピアノ=150%、弦楽四重奏・編成譜=100%。Issue #49） */}
-                  <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(notationSizeMultiplier * 100)}%</span>
                   {/* 1段がページに収まらない編成（大編成に限らない、全譜種共通のfit計算）で
                       自動縮小が働いているときだけ、実際に描画されているサイズ（実効倍率）を
                       表示する。ユーザーが「なぜスライダーの表示より小さく見えるのか」に
@@ -7268,81 +7247,73 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                   title="密な小節と疎な小節の幅の差を調節します。0% = 音符量どおりの幅（差が大きい）、100% = 全小節を等幅に。密な小節は詰まります"
                 >
                   小節幅の均等さ
-                  <input
-                    type="range"
+                  <LayoutNumberInput
+                    label="小節幅の均等さ"
+                    // 欄では 0〜100(%) で扱い、内部では 0〜1 に変換して保持する
+                    value={Math.round(measureWidthEvenness * 100)}
                     min={0}
                     max={100}
                     step={5}
-                    value={Math.round(measureWidthEvenness * 100)}
-                    onChange={e => {
-                      // スライダーは 0〜100(%) で扱い、内部では 0〜1 に変換して保持する
-                      const v = Math.max(0, Math.min(1, Number(e.target.value) / 100));
-                      if (!isNaN(v)) {
-                        setMeasureWidthEvenness(v);
-                        localStorage.setItem(MEASURE_WIDTH_EVENNESS_KEY, String(v));
-                      }
+                    unit="%"
+                    onCommit={percent => {
+                      const v = percent / 100;
+                      setMeasureWidthEvenness(v);
+                      localStorage.setItem(MEASURE_WIDTH_EVENNESS_KEY, String(v));
                     }}
-                    style={{ width: 90 }}
-                    aria-label="小節幅の均等さ"
+                    onNotice={notifyScoreEdit}
                   />
-                  {/* 現在値（%）。スライダーだけだと今いくつか分からないため小さく添える */}
-                  <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(measureWidthEvenness * 100)}%</span>
                 </label>
                 <label
                   style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
                   title="段と段の間隔です。プラスで広げ、マイナスで狭められます。広げると1ページに入る段数の上限が自動で下がり、狭めると自動で増えます。既定は楽譜の種類により異なります（ピアノは-30px、それ以外は0px）。大きくマイナスへ振ると段どうしが重なることがあります"
                 >
                   段の間隔
-                  <input
-                    type="range"
+                  <LayoutNumberInput
+                    label="段の間隔"
+                    value={systemRowGapPx}
                     min={SYSTEM_ROW_GAP_MIN_PX}
                     max={SYSTEM_ROW_GAP_MAX_PX}
-                    step={1}
-                    value={systemRowGapPx}
-                    onChange={e => {
-                      const v = Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, Number(e.target.value)));
-                      if (!isNaN(v)) {
-                        setSystemRowGapPx(v);
-                        localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(v));
-                      }
+                    unit="px"
+                    // マイナス3桁（-60 など）が入るため、mm の欄より少し広くする
+                    widthPx={60}
+                    onCommit={v => {
+                      setSystemRowGapPx(v);
+                      localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(v));
                     }}
-                    style={{ width: 70 }}
-                    aria-label="段の間隔"
+                    onNotice={notifyScoreEdit}
                   />
-                  <span style={{ fontSize: 12, color: '#555', width: 30 }}>{systemRowGapPx}px</span>
                 </label>
                 <label
                   style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
                   title="段の中の譜表どうしの間隔です（ピアノの右手/左手、四重奏の4段、編成譜のパート間など）。プラスで広げ、マイナスで詰められます。自動で決まる間隔への補正値で、既定は楽譜の種類により異なります（ピアノは38px、それ以外は0＝自動計算のまま）"
                 >
                   パート間隔
-                  <input
-                    type="range"
+                  <LayoutNumberInput
+                    label="パート間隔"
+                    value={partSpacingOffsetPx}
                     min={PART_SPACING_OFFSET_MIN_PX}
                     max={PART_SPACING_OFFSET_MAX_PX}
                     step={1}
-                    value={partSpacingOffsetPx}
-                    // 1回のつまみ操作＝Undo 1件にするための区切り（音符の大きさのスライダーと同じ流儀）。
-                    // 押し直すたびに「まだ履歴を積んでいない」へ戻し、実際に値が変わる最初の1回だけ積む。
-                    // キーボードの矢印は押しっぱなし（repeat）を1件にまとめる
-                    onPointerDown={() => { partSpacingHistoryPushedRef.current = false; }}
-                    onKeyDown={e => { if (!e.repeat) partSpacingHistoryPushedRef.current = false; }}
-                    onChange={e => {
-                      const v = Number(e.target.value);
-                      if (isNaN(v)) return;
+                    unit="px"
+                    widthPx={60}
+                    // 1回の編集（欄にフォーカスしてから外れるまで）＝Undo 1件にするための区切り。
+                    // 入るたびに「まだ履歴を積んでいない」へ戻し、実際に値が変わる最初の1回だけ積む
+                    // （#572 のスライダーでは onPointerDown が区切りだったが、#578 で数値入力へ
+                    //   変わったのでフォーカスが区切りになった。音符の大きさと同じ流儀）
+                    onEditSessionStart={() => { partSpacingHistoryPushedRef.current = false; }}
+                    onCommit={v => {
                       // パート間隔は Undo/Redo のスナップショットに入っている（Issue #572）。
-                      // ここで履歴を積まないと、スライダーで変えた値が無関係な Undo で
+                      // ここで履歴を積まないと、この欄で変えた値が無関係な Undo で
                       // 古い値へ戻ってしまう（スナップショットは常に「その時点の値」を持つため）
                       if (!partSpacingHistoryPushedRef.current) {
                         partSpacingHistoryPushedRef.current = true;
                         pushHistory();
                       }
+                      // 書き換えの唯一の出口を通す（クランプと localStorage 保存はここが持つ）
                       applyPartSpacingOffsetPx(v);
                     }}
-                    style={{ width: 70 }}
-                    aria-label="パート間隔"
+                    onNotice={notifyScoreEdit}
                   />
-                  <span style={{ fontSize: 12, color: '#555', width: 30 }}>{partSpacingOffsetPx}px</span>
                 </label>
                 {/* 「段組」= 1段に何小節入れるか／1ページに何段並べるかの2項目。「楽譜設定」タブから
                     移動してきた（Issue #144）。音楽そのものは変えず紙面の詰め方だけを決める設定なので
@@ -7417,46 +7388,36 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                   title={`タイトル文字列の前に追加する余白です（1ページ目のみ）。既定は${DEFAULT_TITLE_MARGIN_TOP_MM}mmです`}
                 >
                   タイトル余白(上)
-                  <input
-                    type="range"
+                  <LayoutNumberInput
+                    label="タイトル余白(上)"
+                    value={titleMarginTopMm}
                     min={TITLE_MARGIN_TOP_MIN_MM}
                     max={TITLE_MARGIN_TOP_MAX_MM}
-                    step={1}
-                    value={titleMarginTopMm}
-                    onChange={e => {
-                      const v = Math.max(TITLE_MARGIN_TOP_MIN_MM, Math.min(TITLE_MARGIN_TOP_MAX_MM, Number(e.target.value)));
-                      if (!isNaN(v)) {
-                        setTitleMarginTopMm(v);
-                        localStorage.setItem(TITLE_MARGIN_TOP_KEY, String(v));
-                      }
+                    unit="mm"
+                    onCommit={v => {
+                      setTitleMarginTopMm(v);
+                      localStorage.setItem(TITLE_MARGIN_TOP_KEY, String(v));
                     }}
-                    style={{ width: 70 }}
-                    aria-label="タイトル余白(上)"
+                    onNotice={notifyScoreEdit}
                   />
-                  <span style={{ fontSize: 12, color: '#555', width: 30 }}>{titleMarginTopMm}mm</span>
                 </label>
                 <label
                   style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
                   title={`タイトルブロックと1段目の間の余白です（1ページ目のみ）。既定は${DEFAULT_TITLE_MARGIN_BOTTOM_MM}mmです`}
                 >
                   タイトル余白(下)
-                  <input
-                    type="range"
+                  <LayoutNumberInput
+                    label="タイトル余白(下)"
+                    value={titleMarginBottomMm}
                     min={TITLE_MARGIN_BOTTOM_MIN_MM}
                     max={TITLE_MARGIN_BOTTOM_MAX_MM}
-                    step={1}
-                    value={titleMarginBottomMm}
-                    onChange={e => {
-                      const v = Math.max(TITLE_MARGIN_BOTTOM_MIN_MM, Math.min(TITLE_MARGIN_BOTTOM_MAX_MM, Number(e.target.value)));
-                      if (!isNaN(v)) {
-                        setTitleMarginBottomMm(v);
-                        localStorage.setItem(TITLE_MARGIN_BOTTOM_KEY, String(v));
-                      }
+                    unit="mm"
+                    onCommit={v => {
+                      setTitleMarginBottomMm(v);
+                      localStorage.setItem(TITLE_MARGIN_BOTTOM_KEY, String(v));
                     }}
-                    style={{ width: 70 }}
-                    aria-label="タイトル余白(下)"
+                    onNotice={notifyScoreEdit}
                   />
-                  <span style={{ fontSize: 12, color: '#555', width: 30 }}>{titleMarginBottomMm}mm</span>
                 </label>
               </div>
               {/* リセット系4種を1つのメニューへ集約する（Issue #143）。

@@ -94,7 +94,7 @@ function frameMarginTop(startMeasure: number): string {
   return (screen.getByTestId(`system-frame-${startMeasure}`) as HTMLElement).style.marginTop;
 }
 
-/** 「音符の大きさ」スライダーのいまの値（%） */
+/** 「音符の大きさ」の数値入力のいまの値（%） */
 function notationSizePercent(): number {
   return Number((screen.getByLabelText('音符の大きさ') as HTMLInputElement).value);
 }
@@ -246,22 +246,24 @@ describe('ScorePage: レイアウトタブ＝整えるモード（Issue #571）'
     });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
-  it('スライダーで変えた音符の大きさも Undo 1回で戻る（角ハンドルと同じ1操作＝1件）', async () => {
-    // 大きさは Undo/Redo のスナップショットに入っているので、スライダー側でも
-    // 操作ごとに履歴を積む必要がある。積まないと、スライダーで変えた値が
-    // 無関係な Undo で古い値へ戻ってしまう（Issue #571）
+  it('数値入力で変えた音符の大きさも Undo 1回で戻る（角ハンドルと同じ1操作＝1件）', async () => {
+    // 大きさは Undo/Redo のスナップショットに入っているので、数値入力側でも
+    // 操作ごとに履歴を積む必要がある。積まないと、数値入力で変えた値が
+    // 無関係な Undo で古い値へ戻ってしまう（Issue #571）。
+    // Issue #578 でスライダーが数値入力へ変わり、履歴の区切りは
+    // 「つまみを掴んだとき」から「欄にフォーカスが入ったとき」へ移った
     await renderScore();
     openTab('レイアウト');
-    const slider = screen.getByLabelText('音符の大きさ') as HTMLInputElement;
+    const input = screen.getByLabelText('音符の大きさ') as HTMLInputElement;
     const before = notationSizePercent();
 
-    fireEvent.pointerDown(slider, { button: 0, isPrimary: true, pointerId: 1 });
-    fireEvent.change(slider, { target: { value: String(before + 10) } });
-    fireEvent.change(slider, { target: { value: String(before + 20) } });
-    fireEvent.pointerUp(slider, { pointerId: 1 });
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: String(before + 10) } });
+    fireEvent.change(input, { target: { value: String(before + 20) } });
+    fireEvent.blur(input);
     expect(notationSizePercent()).toBe(before + 20);
 
-    // つまみを動かし続けた1回ぶんは履歴1件（何段階動かしても1回で戻る）
+    // 1回の編集（フォーカスして値を入れ終えるまで）ぶんは履歴1件（何回打ち直しても1回で戻る）
     fireEvent.click(screen.getByTitle(/元に戻す/));
     await waitFor(() => {
       expect(notationSizePercent()).toBe(before);

@@ -1,10 +1,12 @@
 // src/components/ScorePageLayoutControlNames.test.tsx
-// Issue #563: レイアウトタブのスライダー・数値入力 11 個のアクセシブルな名前を固定する。
+// Issue #563: レイアウトタブの数値入力 11 個のアクセシブルな名前を固定する。
 //
 // これらは <label> で囲まれているため名前が「無い」わけではないが、その場合の名前は
-// 「ラベル文字＋現在値」（例: 「余白(左右)14mm」）になり、値を動かすたびに名前まで変わる。
+// 「ラベル文字＋単位」（例: 「余白(左右)mm」）になり、ラベルだけを頼りに探せない。
 // aria-label を明示して名前をラベルだけに固定したので、getByLabelText（完全一致）で
 // 取得できることをここで固定する。
+//
+// Issue #578 で 9 個のスライダーが数値入力へ置き換わり、11 個すべてが spinbutton になった。
 //
 // ScorePage の全体マウントは重いので、このファイルではマウントを1回に絞っている
 // （同じファイルで何度もマウントすると実行が長くなるため）。
@@ -73,15 +75,25 @@ describe('レイアウトタブのコントロールのアクセシブルな名�
       expect(control, `${name} の aria-label`).toHaveAttribute('aria-label', name);
     }
 
-    // ロール別にも取得できること（9個がスライダー、2個が数値入力）
+    // ロール別にも取得できること（11個すべてが数値入力＝spinbutton。#578）
     for (const name of LAYOUT_CONTROL_NAMES) {
-      const role = (name === '段あたり小節数' || name === '段数/ページ') ? 'spinbutton' : 'slider';
-      expect(screen.getByRole(role, { name }), `${name}（role=${role}）`).toBeTruthy();
+      expect(screen.getByRole('spinbutton', { name }), `${name}（role=spinbutton）`).toBeTruthy();
+    }
+    // レイアウトタブにスライダーは残っていない（#578 の受入条件。
+    // 「画面表示のズーム」はタブの外の常設行にあるため、ここでは対象外）
+    const layoutGroups = Array.from(document.querySelectorAll('.toolbar-layout-group'));
+    expect(layoutGroups.length).toBeGreaterThan(0);
+    for (const group of layoutGroups) {
+      expect(group.querySelector('input[type="range"]'), 'レイアウトタブのスライダー').toBeNull();
     }
 
-    // 値を動かしても名前は「余白(左右)」のまま（現在値が名前へ混ざらないこと）
+    // 値を変えても名前は「余白(左右)」のまま（値や単位が名前へ混ざらないこと）
     const sideMargin = screen.getByLabelText('余白(左右)') as HTMLInputElement;
+    // Issue #578 round1 P2 以降、キーボードで打った値が反映されるのは
+    // Enter・フォーカスを外したときの確定だけ（打っている途中の中間値は譜面に当てない）。
+    // そのため、打ったあとに blur を足して「欄から離れた」ところまで再現する。
     fireEvent.change(sideMargin, { target: { value: '18' } });
+    fireEvent.blur(sideMargin);
     expect(sideMargin.value).toBe('18');
     expect(screen.getByLabelText('余白(左右)')).toBe(sideMargin);
   }, MOUNT_HEAVY_TIMEOUT_MS);

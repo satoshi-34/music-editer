@@ -783,22 +783,28 @@ export function describeMxlExtractFailed(reason: 'notZip' | 'brokenZip' | 'noXml
 }
 
 /**
- * 段レイアウトパネルの直接入力が数値として読めなかったときの文言（#482 round1・#318）。
+ * レイアウトの直接入力が数値として読めなかったときの文言（#482 round1・#318）。
  * 黙って閉じると「入力したのに何も起きない」行き止まりになるため理由を伝える。
+ *
+ * kind には項目名をそのまま渡す（段レイアウトパネルの「小節数」「間隔」に加え、
+ * レイアウトタブの数値入力の「余白(左右)」なども通る。#578 で項目名を自由文字列へ広げた）。
  */
-export function describeSystemLayoutValueInvalid(kind: '小節数' | '間隔'): string {
+export function describeSystemLayoutValueInvalid(kind: string): string {
   return `${kind}を数値として読み取れなかったため、変更しませんでした`;
 }
 
 /**
- * 段レイアウトパネルの直接入力が入力どおりに適用できず、丸めて適用したときの文言
+ * レイアウトの直接入力が入力どおりに適用できず、丸めて適用したときの文言
  * （#482 round1・round4・#318）。範囲外だけでなく小数入力（round4 P2）も対象なので、
  * 「範囲」と「整数」の両方の制約を1文で伝える。
+ *
+ * unit は単位（mm / px / %）。段レイアウトパネルは単位を出していないので既定は空文字にし、
+ * 従来の文言を変えない（#578 でレイアウトタブの数値入力と文言を共用した）。
  */
 export function describeSystemLayoutValueClamped(
-  kind: '小節数' | '間隔', applied: number, min: number, max: number,
+  kind: string, applied: number, min: number, max: number, unit = '',
 ): string {
-  return `${kind}は ${min}〜${max} の整数で指定できます（${applied} に丸めて適用しました）`;
+  return `${kind}は ${min}〜${max}${unit} の整数で指定できます（${applied}${unit} に丸めて適用しました）`;
 }
 
 /**
