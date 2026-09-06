@@ -587,6 +587,40 @@ export interface ScorePageProps {
  * 自然終了から後始末（stopAll）までの待ち時間（#605）。終了タイマーは音価の終端で鳴るので、
  * 最後の音の余韻（最大 MAX_RELEASE_TAIL_SECONDS）が鳴り切る余裕を足す
  */
+/**
+ * タイトル編集ダイアログ（Issue #576）が持ち主になっている項目。
+ * 「決定で積むスナップショット」「変更があったかの判定」「キャンセルで書き戻す先」で
+ * 同じ 8 項目を列挙する必要があるため、正本をここ 1 か所に置く
+ * （#451 で同じダイアログを使い回す予定があり、列挙が散らばると足し忘れが起きる）。
+ */
+const TITLE_SNAPSHOT_KEYS = [
+  'title', 'subtitle', 'lyricist', 'composer', 'arranger',
+  'titleFontId', 'titleFontSize', 'titleFontWeight',
+] as const;
+
+/** 上の 8 項目を持つ形（ScoreSnapshot はコンポーネント内の型なので、構造だけで受ける） */
+type TitleSnapshotFields = { [K in typeof TITLE_SNAPSHOT_KEYS[number]]?: unknown };
+
+/**
+ * base の 8 項目だけを source の値へ差し替えた新しいオブジェクトを返す。
+ * 「いまの譜面（音符などは最新）＋タイトルはダイアログを開いた時点」という
+ * スナップショットを作るために使う。
+ */
+function withTitleFieldsFrom<T extends TitleSnapshotFields>(base: T, source: T): T {
+  const next: T = { ...base };
+  for (const key of TITLE_SNAPSHOT_KEYS) {
+    // キーごとに型が違う（string / number / union）ので、まとめて代入するにはここだけ緩める。
+    // 代入元・代入先とも同じ T の同じキーなので、実際の値の型は食い違わない
+    (next as Record<string, unknown>)[key] = source[key];
+  }
+  return next;
+}
+
+/** 8 項目のどれかが変わっているか（変わっていなければ履歴を積まない） */
+function hasTitleFieldChanges<T extends TitleSnapshotFields>(a: T, b: T): boolean {
+  return TITLE_SNAPSHOT_KEYS.some((key) => a[key] !== b[key]);
+}
+
 const PLAYBACK_END_CLEANUP_DELAY_MS = (MAX_RELEASE_TAIL_SECONDS + 0.5) * 1000;
 
 export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, onHomeActionsReady }: ScorePageProps = {}) {
@@ -2389,7 +2423,18 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * stopped のときは何もしない（起動時の復元で音声エンジンを作らせないため）。
    * 終了は必ず finally から呼ぶ（復元が途中で失敗しても再生ボタンが戻るように）
    */
+  // タイトル編集ダイアログ（Issue #576）を開いた時点の値。キャンセル・Esc で戻す先であり、
+  // 「決定」で履歴へ積む中身でもある。宣言をここに置いているのは、すぐ下の beginWorkRestore
+  // （＝作品の切替・復元の入口）から控えを捨てる必要があるため
+  const titleEditBaselineRef = useRef<ScoreSnapshot | null>(null);
+
   const beginWorkRestore = useCallback((): number => {
+    // 別の作品へ入れ替わるので、開いたままのタイトル編集ダイアログは閉じ、控えも捨てる
+    // （#576 round1 P2-3）。残したままだと、新規作成・ファイル読込・復元のあとに
+    // 「キャンセル」で前の作品のタイトルが新しい譜面へ書き戻され、「決定」では
+    // 前の作品のスナップショットが新しい譜面の履歴に積まれてしまう
+    titleEditBaselineRef.current = null;
+    setIsTitleEditOpen(false);
     const token = ++workRestoreSeqRef.current;
     workRestoreInProgressRef.current = true;
     setIsWorkRestoring(true);
@@ -2655,8 +2700,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   }, []);
 
   // ── タイトル編集ダイアログ（Issue #576） ────────────────────────────
-  // 開いた時点の値。キャンセル・Esc で戻す先であり、「決定」で履歴へ積む中身でもある
-  const titleEditBaselineRef = useRef<ScoreSnapshot | null>(null);
+  // タイトル欄の中身が5つとも空か（＝見出しの高さが 0 になり、クリックの入口が消える状態）
+  const isTitleBlockEmpty = !title && !subtitle && !lyricist && !composer && !arranger;
 
   const openTitleEditDialog = useCallback(() => {
     // 印刷プレビュー中・パート譜の閲覧専用表示では譜面を編集できないので、開かない
@@ -2687,17 +2732,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     const now = currentScoreRef.current;
     // 何も変えずに「決定」した場合まで履歴へ積むと、Undo が1回空振りする。
     // 8項目のどれかが変わったときだけ積む（＝ダイアログ1回につき最大1件）
-    const changed = (
-      baseline.title !== now.title
-      || baseline.subtitle !== now.subtitle
-      || baseline.lyricist !== now.lyricist
-      || baseline.composer !== now.composer
-      || baseline.arranger !== now.arranger
-      || baseline.titleFontId !== now.titleFontId
-      || baseline.titleFontSize !== now.titleFontSize
-      || baseline.titleFontWeight !== now.titleFontWeight
-    );
-    if (changed) pushHistoryWithSnapshot(baseline);
+    if (!hasTitleFieldChanges(baseline, now)) return;
+    // 積むのは「開いた時点の譜面まるごと」ではなく、**いまの譜面のタイトル 8 項目だけを
+    // 開いた時点の値へ戻したもの**（#576 round1 P2-2）。このダイアログは暗幕を置いていない
+    // ＝開いたまま音符を編集できるので、開いた時点の譜面をそのまま積むと、そのあとの
+    // Undo で音符の編集まで巻き戻ってしまう
+    pushHistoryWithSnapshot(withTitleFieldsFrom(now, baseline));
   }, [closeTitleEditDialog, pushHistoryWithSnapshot]);
 
   const handleTitleEditCancel = useCallback(() => {
@@ -8433,6 +8473,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                         }}
                       >
                         {title}
+                        {/* タイトル・サブタイトル・作者がすべて空だと、h1 も p も高さ 0 になって
+                            クリックの入口そのものが画面から消えてしまう（#576 round1 P2-4）。
+                            譜面上の直接入力を廃止した今、ここが唯一の入口なので、
+                            全部空のときだけ薄い案内文を出して掴めるようにする。
+                            案内文は画面だけのもの。印刷・印刷プレビューでは
+                            App.css 側（@media print / .print-preview）で消える */}
+                        {isTitleBlockEmpty && (
+                          <span className="score-title-placeholder">タイトルを入力</span>
+                        )}
                       </h1>
                       <p
                         className="score-subtitle"

@@ -69,3 +69,71 @@ describe('複数行タイトルの MusicXML 往復（#576 / #636）', () => {
     expect(parseMusicXml(xml).metadata.title).toBe('ふつうの題');
   });
 });
+
+// ── score-header の要素順（Issue #576 round1 P1） ─────────────────────
+// MusicXML の score-header は work → movement-number → movement-title →
+// identification → defaults → credit* → part-list の順が決まっている。
+// DOCTYPE で partwise の DTD を宣言している以上、順序を守らないと
+// 厳格な読み手（Finale / Dolet）が不正とみなすか credit を無視する。
+describe('複数行タイトルの <credit> は score-header の正しい位置に出る（#576 round1 P1）', () => {
+  it('<credit> は </identification> より後・<part-list> より前に置かれる', () => {
+    const source = parseMusicXml(xmlWith('<work><work-title>もとの題</work-title></work>'));
+    const xml = scoreToMusicXml({
+      ...source,
+      metadata: { ...source.metadata, title: '上の行\n下の行' },
+    });
+
+    const identificationEnd = xml.indexOf('</identification>');
+    const creditStart = xml.indexOf('<credit ');
+    const partListStart = xml.indexOf('<part-list>');
+    expect(identificationEnd).toBeGreaterThan(-1);
+    expect(creditStart).toBeGreaterThan(identificationEnd);
+    expect(partListStart).toBeGreaterThan(creditStart);
+  });
+
+  it('作曲者欄の改行も work-title と同じく &#10; で書く（#576 round1 P3）', () => {
+    const source = parseMusicXml(xmlWith('<work><work-title>題</work-title></work>'));
+    const xml = scoreToMusicXml({
+      ...source,
+      metadata: { ...source.metadata, composer: '作曲: だれか\n編曲: べつのだれか' },
+    });
+    expect(xml).toContain('<creator type="composer">作曲: だれか&#10;編曲: べつのだれか</creator>');
+    expect(parseMusicXml(xml).metadata.composer).toBe('作曲: だれか\n編曲: べつのだれか');
+  });
+});
+
+// ── credit-words を「複数行の題」とみなす条件（Issue #576 round1 P2-1） ──
+// Finale は 1 行の中で書式が切り替わるだけでも credit-words を分けて出す。
+// 「2つ以上あれば改行で結合」だと、1 行の題が 2 行に化け、正しい work-title まで上書きされる。
+describe('credit-words の採用条件（#576 round1 P2-1）', () => {
+  /** credit-words を任意個持つ credit タグを組み立てる */
+  function titleCredit(...lines: string[]): string {
+    return `<credit page="1"><credit-type>title</credit-type>${lines.map((l) => `<credit-words>${l}</credit-words>`).join('')}</credit>`;
+  }
+
+  it('work-title と行が一致しない複数 credit-words は無視し、work-title を採る（Finale の書式切り替え）', () => {
+    const data = parseMusicXml(xmlWith(
+      `<work><work-title>ソナタ第1番</work-title></work><identification/>${titleCredit('ソナタ', '第1番')}`,
+    ));
+    expect(data.metadata.title).toBe('ソナタ第1番');
+  });
+
+  it('credit の行を空白でつないだ文字列が work-title と一致すれば、行分けを採る', () => {
+    const data = parseMusicXml(xmlWith(
+      `<work><work-title>上の行 下の行</work-title></work><identification/>${titleCredit('上の行', '下の行')}`,
+    ));
+    expect(data.metadata.title).toBe('上の行\n下の行');
+  });
+
+  it('work-title も movement-title も無ければ credit の行分けをそのまま採る', () => {
+    const data = parseMusicXml(xmlWith(`<identification/>${titleCredit('題の1行目', '題の2行目')}`));
+    expect(data.metadata.title).toBe('題の1行目\n題の2行目');
+  });
+
+  it('credit-words が1つだけなら従来どおり work-title を採る', () => {
+    const data = parseMusicXml(xmlWith(
+      `<work><work-title>work 側の題</work-title></work><identification/>${titleCredit('credit 側の題')}`,
+    ));
+    expect(data.metadata.title).toBe('work 側の題');
+  });
+});

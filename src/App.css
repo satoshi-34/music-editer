@@ -1812,6 +1812,18 @@ button.ghost.active:hover:not(:disabled) {
 .score-credit[role="button"]:hover {
   background: rgba(37, 99, 235, .07);
 }
+/* タイトル・サブタイトル・作者が全部空のときだけ出る案内文（#576 round1 P2-4）。
+   全部空だと h1 も p も高さ 0 になり、クリックの入口が画面から消えてしまうため、
+   掴めるだけの高さと薄い文字を与える。あくまで画面用の案内なので、
+   印刷と印刷プレビューでは消す（紙面に出したら誤植になる）。 */
+.score-title-placeholder {
+  color: #9ca3af;
+  font-weight: 400;
+}
+.print-preview .score-title-placeholder { display: none; }
+@media print {
+  .score-title-placeholder { display: none; }
+}
 
 /* ダイアログ本体。暗幕（オーバーレイ）は意図的に置いていない: 書体・文字サイズを
    変えた結果は後ろの譜面のタイトルで確かめるものなので、覆うと用をなさない。

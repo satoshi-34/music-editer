@@ -65,6 +65,8 @@ export default function TitleEditDialog({
   // 親が毎レンダー新しい関数を作るたびにキーの登録・解除を繰り返すことになるため
   const onCancelRef = useRef(onCancel);
   onCancelRef.current = onCancel;
+  const onConfirmRef = useRef(onConfirm);
+  onConfirmRef.current = onConfirm;
 
   // 開いたらタイトル欄へフォーカスを置く（クリックした人がそのまま打てるように）
   useEffect(() => {
@@ -76,10 +78,19 @@ export default function TitleEditDialog({
   // Esc は他でも使われるため、ダイアログが出ている間はここで握りつぶす
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      event.stopPropagation();
-      onCancelRef.current();
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        onCancelRef.current();
+        return;
+      }
+      // 各欄が textarea（Enter は改行）なので、決定のキーボード操作は
+      // 修飾キーつきの Enter にする（Mac は Cmd、Windows / Linux は Ctrl）
+      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        event.stopPropagation();
+        onConfirmRef.current();
+      }
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
