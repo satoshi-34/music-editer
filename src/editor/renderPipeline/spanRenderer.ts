@@ -5,8 +5,7 @@
 // 本文は移設前のまま（挙動ゼロ差）。effect 側は戻り値を同じ名前で分割代入して使う。
 // 名前の `P` 接尾辞（notePosKeyP / drawArcPathP …）は、かつて同居していた旧 StaffCanvas の同名ヘルパーと
 // 区別するための歴史的な印で意味は無い。本文ゼロ差のため段6a では触らず、改名は段6b 以降。
-import type { MutableRefObject } from 'react';
-import type React from 'react';
+
 import type { Stave, StaveNote } from 'vexflow';
 import type { TieArc, HairpinMark } from '../../types/storage';
 import type { ClefType } from '../../components/clefUtils';
@@ -17,39 +16,35 @@ import { resolveArcUpward } from '../../utils/arcDirectionUtils';
 import { resolveArcEndpointY, resolveSlurObstacleY, shouldAnchorArcToStemSide } from '../../utils/arcStemAnchorUtils';
 import { ENGRAVING_THICKNESS_UNITS } from '../../utils/engravingDefaults';
 import { ARC_APEX_HANDLE_SIZE, ARC_HIT_MIN_LEN_SCREEN_PX, ARC_HIT_STROKE_SCREEN_PX } from './arcConstants';
-import type { ArcGeom, ArcIdentityP, ClickCycleTarget, DragSessions, PendingClickCycle, Sel, SelectedArcSel, SelectedHairpinSel } from '../types';
+import type { ArcIdentityP, ClickCycleApi, LayerContext, LedgerContext, SelectionContext, SvgContext } from '../types';
 import type { PartConfig } from '../../components/PianoSystemCanvas';
 
 export type TieNoteP={note:StaveNote;keys:string[];tiedToNext:boolean;isRest:boolean;stave:Stave;isMultiVoice:boolean};
 export type PendingArcP={partIndex:number;voiceIndex:number;arc:TieArc;arcIndex:number;startNote:StaveNote;startStave:Stave;startClef:ClefType;startMeasureIdx:number;startEventIdx:number;startIsMultiVoice:boolean};
 export type PendingHairpinP={partIndex:number;voiceIndex:number;hairpin:HairpinMark;hairpinIndex:number;startNote:StaveNote;startStave:Stave;startMeasureIdx:number;startEventIdx:number};
 
-/** createSpanRenderer が閉包の代わりに受け取るもの（PianoSystemCanvas の描画 effect のローカル） */
+/**
+ * createSpanRenderer が閉包の代わりに受け取るもの（PianoSystemCanvas の描画 effect のローカル）。
+ * #695 段6b-2: 平らな 16 項目を「変更する理由が同じ」文脈 5 つ＋parts に束ねた（中身は同じ値）。
+ * selection は setter しか使わない（値は systemSpans 側が読む）。
+ */
 export interface SpanRendererDeps {
-  svg: SVGSVGElement;
-  svgRoot: SVGGElement;
-  clickCyclePendingRef: MutableRefObject<PendingClickCycle | null>;
-  dragSessionsRef: MutableRefObject<DragSessions>;
+  svg: SvgContext;
+  ledger: LedgerContext;
+  layer: LayerContext;
+  selection: SelectionContext;
+  cycle: ClickCycleApi;
   parts: PartConfig[];
-  arcIdentityMap: Map<string, ArcIdentityP>;
-  arcGeomMap: Map<string, ArcGeom>;
-  activeLayerPartIndex: number | undefined;
-  activeVoiceIndex: number;
-  setSelected: (value: React.SetStateAction<NonNullable<Sel> | null>) => void;
-  setSelectedArc: (value: React.SetStateAction<NonNullable<SelectedArcSel> | null>) => void;
-  setSelectedHairpin: (value: React.SetStateAction<NonNullable<SelectedHairpinSel> | null>) => void;
-  registerClickCycleTarget: (el: Element, target: ClickCycleTarget) => void;
-  prepareClickCycle: (selfId: string, clientX: number, clientY: number) => PendingClickCycle | null;
-  armClickCycleFor: (selfId: string, clientX: number, clientY: number) => void;
-  commitClickCycle: (pending: PendingClickCycle) => void;
 }
 
 export function createSpanRenderer(deps: SpanRendererDeps) {
-  const {
-    svg, svgRoot, clickCyclePendingRef, dragSessionsRef, parts, arcIdentityMap, arcGeomMap,
-    activeLayerPartIndex, activeVoiceIndex, setSelected, setSelectedArc, setSelectedHairpin,
-    registerClickCycleTarget, prepareClickCycle, armClickCycleFor, commitClickCycle,
-  } = deps;
+  // 束から従来のローカル名へ展開する（以下の本文は束ね直し前と同一）
+  const { parts } = deps;
+  const { svg, svgRoot } = deps.svg;
+  const { clickCyclePendingRef, dragSessionsRef, arcIdentityMap, arcGeomMap } = deps.ledger;
+  const { activeLayerPartIndex, activeVoiceIndex } = deps.layer;
+  const { setSelected, setSelectedArc, setSelectedHairpin } = deps.selection;
+  const { registerClickCycleTarget, prepareClickCycle, armClickCycleFor, commitClickCycle } = deps.cycle;
   // パートごとの小節をまたぐタイ持ち越しと音符データ収集（タイグループ一括処理のため）
   // isMultiVoice: レガシーのタイも「始点の小節が2声部なら上向き」に合わせるため、
   // 音符を集めるときに小節の声部数を控えておく（Issue #192）。

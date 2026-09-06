@@ -1,6 +1,6 @@
 import type { RefObject } from 'react';
 import { armClickCycle, planClickCycle, type ClickCycleState } from './clickCycleUtils';
-import type { ClickCycleTarget, PendingClickCycle } from './types';
+import type { ClickCycleApi, ClickCycleTarget, PendingClickCycle } from './types';
 
 interface ClickCycleRefs {
   clickCycleStateRef: RefObject<ClickCycleState | null>;
@@ -12,7 +12,7 @@ interface ClickCycleRefs {
  * 描画ごとに作り直す台帳と、再描画をまたいで残す巡回状態を分けるため、
  * Canvas が所有する ref を受け取る。選択や編集の実処理は登録された候補に任せる。
  */
-export function createClickCycle(svg: SVGSVGElement, refs: ClickCycleRefs) {
+export function createClickCycle(svg: SVGSVGElement, refs: ClickCycleRefs): ClickCycleApi {
   const { clickCycleStateRef, clickCycleTargetsRef } = refs;
   // ── 再クリック巡回（Issue #264）の台帳と入口 ───────────────────────
   // 描画のたびに要素は作り直されるので、台帳も毎回まっさらにする。
