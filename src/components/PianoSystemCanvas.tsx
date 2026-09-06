@@ -23,14 +23,14 @@ import {
   ClefNote,
 } from 'vexflow';
 import type { Tool } from './Palette';
-import {
-  toVFDur, beatsFromVF, getDurationTool, dotBeatsMultiplier, eventOccupiedBeats,
-  buildRestEditReplacement, defaultRestKeyForClef,
-} from '../editor/durationTools';
 // NoteEvent はこのファイル内で編集頻度の高いプロパティだけを抜粋した同名の型を独自定義している。
 // 保存データそのものを扱うヘルパー（声部をまたぐ書き込み先の解決など）では、
 // ストレージ側の完全な型が要るので StoredNoteEvent という別名で読み込む。
 import type { MeasureData, NoteEvent as StoredNoteEvent, TieArc, HairpinMark, DynamicMarking, CustomSymbolDef, OrnamentType, AdjustableSymbolKind, ArticulationMarking, TimeSignatureStyle } from '../types/storage';
+import {
+  toVFDur, beatsFromVF, getDurationTool, dotBeatsMultiplier, eventOccupiedBeats,
+  buildRestEditReplacement, defaultRestKeyForClef,
+} from '../editor/durationTools';
 import { ornamentToVexCode } from '../utils/ornamentUtils';
 import type { ClefType } from './clefUtils';
 import {

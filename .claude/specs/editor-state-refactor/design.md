@@ -932,7 +932,7 @@ updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setText
   PianoSystemCanvas 8,442 → 8,343 行
 - 先行実装の注記: 拍数計算は `utils/voiceMeasureUtils` の `getDurationBeats / getEventDurationBeats` と同値で、
   `components/RestOverlapFixV2` にも同じ変換の複製がある（measureRestFillUtils の冒頭注記と同じ）。この段は物理移設に徹し、
-  3 か所の統合は挙動（未知の音価の丸め先など）に触るので別 Issue（#711）
+  3 か所の統合は挙動に触りうるので別 Issue（#711。レビューの実測では未知の音価の丸め先は 3 か所とも 1 拍で一致）
 - 新規: `src/editor/durationTools.test.ts`（9 件。本文のコメントに書かれている例＝同長置換・分割と noteAfterRest・長い音価は null・
   連符ツールでのグループ置換・変換表）で移設前の挙動を固定した
 - 検証: 本文の機械比較 IDENTICAL、tsc -b、フルテスト、lint:ratchet 基準値、独立レビュー 1 本（モジュール関数の移動のみ）
