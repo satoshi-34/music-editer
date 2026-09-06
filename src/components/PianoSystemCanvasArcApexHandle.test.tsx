@@ -51,7 +51,7 @@ vi.mock('../audio/SoundSource', () => ({
 
 const TEST_CONTAINER_WIDTH = 700;
 const ARC_KEY = 'p0v0m0e0a0';
-// 頂点ハンドルの一辺（PianoSystemCanvas の ARC_APEX_HANDLE_SIZE と同じ値）
+// 頂点ハンドルの一辺（正本は editor/renderPipeline/arcConstants.ts の ARC_APEX_HANDLE_SIZE）
 const APEX_HANDLE_SIZE = 9;
 
 function svgLogicalHeight(svg: SVGSVGElement): number {

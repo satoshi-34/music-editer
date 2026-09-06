@@ -3,6 +3,8 @@
 // PianoSystemCanvas の描画 effect にあった閉包（drawArcPathP / drawTieArcP / stemTipYOfP と
 // その台帳）を、閉包が参照していたローカルを SpanRendererDeps として明示して物理移設した。
 // 本文は移設前のまま（挙動ゼロ差）。effect 側は戻り値を同じ名前で分割代入して使う。
+// 名前の `P` 接尾辞（notePosKeyP / drawArcPathP …）は、かつて同居していた旧 StaffCanvas の同名ヘルパーと
+// 区別するための歴史的な印で意味は無い。本文ゼロ差のため段6a では触らず、改名は段6b 以降。
 import type { MutableRefObject } from 'react';
 import type React from 'react';
 import type { Stave, StaveNote } from 'vexflow';
