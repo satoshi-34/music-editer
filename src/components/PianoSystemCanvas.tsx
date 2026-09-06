@@ -471,8 +471,6 @@ function getKeySignatureHitBounds(
   return clampBounds(timeX + timeWidth, fallbackRight);
 }
 
-
-
 function getPreviewLedgerLines(snappedLine: number): number[] {
   const lines: number[] = [];
   if (snappedLine <= -1) {
