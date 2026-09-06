@@ -47,7 +47,8 @@ import { handleMeasureBackgroundClick } from '../editor/handlers/measureClick';
 import { handleVoice2NoteClick } from '../editor/handlers/voice2Click';
 import { articulationNoteClick, customSymbolNoteClick, dynamicNoteClick } from '../editor/handlers/noteClick/symbolAttach';
 import { ornamentNoteClick, ottavaNoteClick, pedalNoteClick } from '../editor/handlers/noteClick/symbolToggle';
-import type { NoteTarget, NoteWriter } from '../editor/handlers/noteClick/types';
+import { customSymbolOffsetNoteClick, customSymbolResizeNoteClick, symbolAdjustNoteClick } from '../editor/handlers/noteClick/symbolAdjust';
+import type { NoteTarget, NoteUiWriter, NoteWriter } from '../editor/handlers/noteClick/types';
 import { getInputAccidental, getInputMicrotone } from '../editor/inputAccidental';
 import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY, estimatePedalBottomExtensionPx, PEDAL_TEXT_DESCENT_PX } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
@@ -176,7 +177,6 @@ import {
 import { buildCustomSymbolEntry, drawCustomSymbolEntries, type CustomSymbolRenderEntry } from '../utils/customSymbolRenderUtils';
 import {
   getSymbolAdjust,
-  listPresentAdjustableSymbolKinds,
   setSymbolAdjustScale,
   setSymbolAdjustOffset,
   ADJUSTABLE_SYMBOL_KIND_LABELS,
@@ -6798,8 +6798,13 @@ export default function PianoSystemCanvas({
               const isOnNote=lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
               // モード別ハンドラ（editor/handlers/noteClick・#695 段6b-4）へ渡す対象と書き込み口。
               // 中身は上のローカルそのもの（束ねても挙動は変わらない）
-              const noteTarget: NoteTarget = { pi, absI, j, hitPi, hitVoice, activeEvs, clickedIsRest, part };
+              const noteTarget: NoteTarget = { pi, absI, j, hitPi, hitVoice, activeEvs, clickedIsRest, part, clientX: me.clientX, clientY: me.clientY };
               const noteWriter: NoteWriter = { updateHitEvent, setSelected, playNoteEvent };
+              // UI（調整オーバーレイ）を開く書き込み口（段6b-4c）。譜面を書く noteWriter と分けて渡す
+              const noteUiWriter: NoteUiWriter = {
+                setSymbolResizeEditState, setSymbolOffsetEditState, setSymbolAdjustPickerState, openSymbolAdjustEditor,
+                findSymbolAnchorRect, anchorFromClientPoint, containerRef, customSymbolDefs,
+              };
               /**
                * フラグ系ツール15モードのテーブル（#244 段3c）。
                * 各 case が「モード×対象種別（音符/休符/placeholder）」のセルに相当する。
@@ -6987,117 +6992,13 @@ export default function PianoSystemCanvas({
                 return articulationNoteClick(noteTarget, noteWriter, tool);
               case 'customSymbol':
                 return customSymbolNoteClick(noteTarget, noteWriter, tool, customSymbolNameOf);
-              case 'customSymbolResize': {
-                if (clickedIsRest) {
-                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
-                    { type: 'customSymbolAdjust', symbolName: customSymbolNameOf(tool.symbolId), adjust: 'resize' }, 'rest') };
-                }
-                const customSymbolResizeMode = tool.symbolId;
-                // サイズ変更は「その音符に対象記号が既に付いている場合」のみオーバーレイを開く
-                // （StaffCanvas と同じ考え方。付いていない記号を新規に生やす事故を防ぐ）。
-                const existing = activeEvs[j].customSymbols?.find(s => s.symbolId === customSymbolResizeMode);
-                if (!existing) {
-                  // 付いていない記号のサイズ調整を押しても何も起きないので、
-                  // 「まだ付いていない」ことと先に付ける手順を伝える（Issue #330）
-                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
-                    { type: 'customSymbolAdjust', symbolName: customSymbolNameOf(customSymbolResizeMode), adjust: 'resize' },
-                    'symbolNotAttached',
-                  ) };
-                }
-                const currentPercent = Math.round((existing.scale ?? 1) * 100);
-                const resizeTarget: AdjustTarget = { type: 'custom', symbolId: customSymbolResizeMode, name: customSymbolResizeMode };
-                setSymbolResizeEditState({
-                  partIndex: hitPi,
-                  measureAbsoluteIndex: absI,
-                  eventIndex: j,
-                  // j はアクティブ声部の events 内の位置なので、どの声部かも一緒に覚えておく
-                  voiceIndex: hitVoice,
-                  target: resizeTarget,
-                  currentValue: String(currentPercent),
-                  // 押したのは音符なので、対象記号の描画位置は DOM から引き当てる（Issue #230）
-                  anchor: findSymbolAnchorRect(hitPi, absI, j, resizeTarget) ?? anchorFromClientPoint(me.clientX, me.clientY),
-                });
-                return { kind: 'handled' };
-              }
-              case 'customSymbolOffset': {
-                if (clickedIsRest) {
-                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
-                    { type: 'customSymbolAdjust', symbolName: customSymbolNameOf(tool.symbolId), adjust: 'offset' }, 'rest') };
-                }
-                const customSymbolOffsetMode = tool.symbolId;
-                // 位置調整も同様に、対象記号が既に付いている場合のみオーバーレイを開く。
-                const existing = activeEvs[j].customSymbols?.find(s => s.symbolId === customSymbolOffsetMode);
-                if (!existing) {
-                  // サイズ調整と同じ理由（Issue #330）。付いていない記号は位置も動かせない
-                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
-                    { type: 'customSymbolAdjust', symbolName: customSymbolNameOf(customSymbolOffsetMode), adjust: 'offset' },
-                    'symbolNotAttached',
-                  ) };
-                }
-                const offsetTarget: AdjustTarget = { type: 'custom', symbolId: customSymbolOffsetMode, name: customSymbolOffsetMode };
-                setSymbolOffsetEditState({
-                  partIndex: hitPi,
-                  measureAbsoluteIndex: absI,
-                  eventIndex: j,
-                  voiceIndex: hitVoice,
-                  target: offsetTarget,
-                  currentX: String(existing.offsetX ?? 0),
-                  currentY: String(existing.offsetY ?? 0),
-                  // 下書きは「開いた時点の値」から始める（矢印キーを押すまでは保存値と同じ）
-                  draftX: existing.offsetX ?? 0,
-                  draftY: existing.offsetY ?? 0,
-                  // 押したのは音符なので、対象記号の描画位置は DOM から引き当てる（Issue #230）
-                  anchor: findSymbolAnchorRect(hitPi, absI, j, offsetTarget) ?? anchorFromClientPoint(me.clientX, me.clientY),
-                });
-                return { kind: 'handled' };
-              }
+              case 'customSymbolResize':
+                return customSymbolResizeNoteClick(noteTarget, noteUiWriter, tool, customSymbolNameOf);
+              case 'customSymbolOffset':
+                return customSymbolOffsetNoteClick(noteTarget, noteUiWriter, tool, customSymbolNameOf);
               case 'symbolAdjustResize':
-              case 'symbolAdjustOffset': {
-                const adjustKind = tool.mode === 'symbolAdjustResize' ? 'resize' as const : 'offset' as const;
-                // 汎用サイズ・位置調整: カスタム記号＋標準記号のうち、この音符に実際に
-                // 付いているものを列挙する（StaffCanvas と同じロジック）。
-                // 休符でも列挙してから判断する。テキスト系（歌詞・コード記号・テンポ表記・
-                // 発想標語）とオッターバは休符にも付けられるため、一律に弾くと
-                // 「付いているのに調整できない」行き止まりになる（#398 Codex round5 P2）。
-                const currentEv = activeEvs[j];
-                const targets: AdjustTarget[] = [
-                  ...(currentEv.customSymbols?.map((s): AdjustTarget => ({ type: 'custom', symbolId: s.symbolId, name: customSymbolDefs.find(d => d.id === s.symbolId)?.name ?? s.symbolId })) ?? []),
-                  ...listPresentAdjustableSymbolKinds(currentEv).map((kind): AdjustTarget => ({ type: 'standard', kind })),
-                ];
-                if (targets.length === 0) {
-                  // 調整できる記号が1つも無い音符では選択リストすら開けない。
-                  // ボタンが押せる＝どの音符でも使える、と受け取られるため理由を言う（Issue #330）。
-                  // 休符では「休符だから使えない」と言うと事実に反する（テキスト系は付けられる）。
-                  // 本当の理由は「まだ何も付いていない」なので、休符用の文言を使う（#398 round6 P2）。
-                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
-                    { type: 'symbolAdjust', adjust: adjustKind },
-                    clickedIsRest ? 'noAdjustableSymbolOnRest' : 'noAdjustableSymbol',
-                  ) };
-                }
-                const containerRect = containerRef.current?.getBoundingClientRect();
-                const overlayX = me.clientX - (containerRect?.left ?? 0);
-                const overlayY = me.clientY - (containerRect?.top ?? 0);
-                const kindKey = adjustKind;
-                if (targets.length === 1) {
-                  // 対象が1つなら選択リストを挟まずに開く。記号に重ならない位置にするため、
-                  // その記号の実描画範囲を DOM から引き当てる（見つからなければクリック点・Issue #230）
-                  const anchor = findSymbolAnchorRect(hitPi, absI, j, targets[0])
-                    ?? anchorFromClientPoint(me.clientX, me.clientY);
-                  openSymbolAdjustEditor(kindKey, hitPi, absI, j, hitVoice, targets[0], currentEv, anchor);
-                } else {
-                  setSymbolAdjustPickerState({
-                    partIndex: hitPi,
-                    measureAbsoluteIndex: absI,
-                    eventIndex: j,
-                    voiceIndex: hitVoice,
-                    kind: kindKey,
-                    options: targets,
-                    overlayX,
-                    overlayY,
-                  });
-                }
-                return { kind: 'handled' };
-              }
+              case 'symbolAdjustOffset':
+                return symbolAdjustNoteClick(noteTarget, noteUiWriter, tool);
               case 'graceNote': {
                 // 前打音×休符は旧実装どおり既定処理へ（休符の選択/挿入になる）
                 if (clickedIsRest) return { kind: 'passThrough' };
