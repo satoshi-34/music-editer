@@ -36,8 +36,8 @@ import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type 
 import { isDynamicMarkingValue } from './dynamicMarkingUtils';
 import { isArticulationMarkingValue } from './articulationMarkingUtils';
 import { isRenderStaffDirection } from './crossStaffUtils';
-import { MAX_VOICES_PER_PART, enforceVoiceLimitInParts, normalizeEmptyVoicesInParts, normalizeMeasuresForPersistence } from './voiceMeasureUtils';
-import { describeVoiceLimitTrimmed, notifyScoreEdit } from './scoreEditorNotices';
+import { enforceVoiceLimitInParts, normalizeEmptyVoicesInParts, normalizeMeasuresForPersistence } from './voiceMeasureUtils';
+import { recordDroppedVoiceMeasures } from './scoreEditorNotices';
 import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
 import { collectTupletContinuityIssues, normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
 import {
@@ -833,7 +833,7 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
   const voiceLimited = enforceVoiceLimitInParts(parsedData.parts);
   parsedData.parts = voiceLimited.parts;
   if (voiceLimited.droppedMeasureCount > 0) {
-    notifyScoreEdit(describeVoiceLimitTrimmed(voiceLimited.droppedMeasureCount, MAX_VOICES_PER_PART));
+    recordDroppedVoiceMeasures(voiceLimited.droppedMeasureCount);
   }
 
   // 読込境界で不変条件「voices を持つ小節では events ≡ voices[0]」を確立する（#244 段5-3）。

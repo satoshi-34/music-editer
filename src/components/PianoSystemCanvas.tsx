@@ -6501,6 +6501,9 @@ export default function PianoSystemCanvas({
             }
             // 連符グループでも、クリックした拍まで手前を休符で埋める（Issue #322 の受入条件）。
             const leading=buildLeadingRests(groupBeats, voiceCountAfterInsert);
+            // 空白クリックの入力も「この段を触った」に数える（#417 round2 P2-1: 非ピアノ譜で
+            // チップ列と「＋」の対象が、いま書いている段に追従するように）
+            requestActivePartChange(pi);
             setScore(prev=>{
               const next=prev.map(cloneMeasureData);
               while(absI>=next.length)next.push(createEmptyMeasure());
@@ -6544,6 +6547,9 @@ export default function PianoSystemCanvas({
             : insertedEventBase;
 
           const leading=buildLeadingRests(addBeats, voiceCountAfterInsert);
+          // 空白クリックの入力も「この段を触った」に数える（#417 round2 P2-1: 非ピアノ譜で
+          // チップ列と「＋」の対象が、いま書いている段に追従するように）
+          requestActivePartChange(pi);
           setScore(prev=>{
             const next=prev.map(cloneMeasureData);
             while(absI>=next.length)next.push(createEmptyMeasure());

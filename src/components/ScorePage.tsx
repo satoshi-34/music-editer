@@ -250,6 +250,9 @@ import {
   notifyScoreEdit,
   describeVoiceAdded,
   describeVoiceLimitReached,
+  describeVoiceLimitTrimmed,
+  describeVoiceCycleUnavailable,
+  takeDroppedVoiceMeasureCount,
   describePageSizeChanged,
   describeImportedClefNormalized,
   describeImportedUnsupportedDynamics,
@@ -614,8 +617,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 作品データには保存しないため、リロードすると既定の3連符へ戻る（#569 仕様3）。
   const [tupletVariantKey, setTupletVariantKey] = useState<string>(String(DEFAULT_TUPLET_NUM_NOTES));
   // 編集中の声部。0=声部1（上声・符幹上向き、従来通りの入力）、1=声部2（下声・符幹下向き）。
-  // #417 で 0|1 の2値から number（最大4声）へ広げた。譜種を切り替えても迷わないように
-  // 値自体は保持しておく（範囲外になったときの丸めは下の useEffect が行う）。
+  // #417 で 0|1 の2値から number（最大4声）へ広げた。別の作品を開いた・譜種を変えたときは
+  // 下の useEffect で声部1へ戻す（前の作品の「声部3を編集中」を持ち越さない）。
   const [activeVoice, setActiveVoice] = useState<number>(0);
   // 編集レイヤーのパート側（#316・ピアノ譜のみ）。レイヤー = (activeLayerPart, activeVoice)。
   // 既定は右手（裁定③案A: 常に明示選択）
@@ -2681,6 +2684,19 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // ピアノ譜は右手・左手を別々に数え、それ以外は**アクティブな段だけ**を数える。
   // 全パートの最大を採ると、他のパートが3声というだけでチップが3枚に増え、
   // いま編集している段には無い声部が押せてしまう（Codex round1 P1-3）
+  // 非ピアノ譜で「いまチップ列が指している段」の表示名（round2 P2-1）。四重奏は固定名、
+  // 編成譜は編成のパート名（2 段目は「(下段)」を添える）、単旋律は空
+  const activePartDisplayLabel = useMemo(() => {
+    if (scoreType === 'quartet') return ['Vn. I', 'Vn. II', 'Va.', 'Vc.'][activePartIndex] ?? '';
+    if (scoreType === 'ensemble') {
+      const n = instrumentation.parts.length;
+      if (activePartIndex < n) return instrumentation.parts[activePartIndex]?.abbreviation || instrumentation.parts[activePartIndex]?.name || '';
+      const secondStaffParts = instrumentation.parts.filter((part) => part.staffCount === 2);
+      const part = secondStaffParts[activePartIndex - n];
+      return part ? `${part.abbreviation || part.name}(下段)` : '';
+    }
+    return '';
+  }, [scoreType, activePartIndex, instrumentation.parts]);
   const usedVoiceCounts = useMemo(() => {
     const entries = getEditablePartEntries();
     if (scoreType === 'piano') {
@@ -2714,12 +2730,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     setActiveVoice(0);
   }, [currentWorkId, scoreType]);
 
-  // 声部数が減った（譜面を開き直した・音符を消して空の声部が畳まれた）ときに、
-  // もう存在しない声部を選んだままにしない。放っておくと「入力しても画面に出ない声部」に
-  // 音符が入り続ける無言の行き止まりになる（#318）
-  useEffect(() => {
-    setActiveVoice(prev => (prev < activeLayerVoiceCount ? prev : Math.max(0, activeLayerVoiceCount - 1)));
-  }, [activeLayerVoiceCount]);
+  // 「存在しない声部を選んだまま」は起きない: resolveVoiceSlotCount が編集中の声部（activeVoice+1）を
+  // 常に下限にするので、選んでいる声部のチップは必ず出る（round2 P3 で無効だった丸め effect を削除）。
 
   // V キーのハンドラは登録しっぱなしの window イベントなので、
   // 巡回に必要な最新値（声部数）を ref 経由で読む（依存配列に足すと毎回貼り替えになる）
@@ -3241,6 +3253,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     e.target.value = '';
     try {
       const data = await importScoreFromFile(file);
+      // 読込境界で落とした声部があれば 1 回だけ知らせる（#417 round2 P2-3・applyLoadedScoreData と同じ）
+      const droppedVoiceMeasures = takeDroppedVoiceMeasureCount();
+      if (droppedVoiceMeasures > 0) notifyScoreEdit(describeVoiceLimitTrimmed(droppedVoiceMeasures, MAX_VOICES_PER_LAYER));
       // applyLoadedScoreData と同等のロジックで画面へ反映する
       // （パート譜表示のリセットも同様。同じパートIDを持つ譜面を開くと表示が継続してしまう）。
       // 取り込みも「復元」なので、途中の再生は塞ぐ（#609 round1 P1）
@@ -3446,6 +3461,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
 
   const applyLoadedScoreData = useCallback(async (restored: SavedScoreData) => {
     const restoreToken = beginWorkRestore();
+    // 読込境界（storage）で上限超えの声部を落としていたら、ここで 1 回だけ知らせる（#417 round2 P2-3）。
+    // パーサ内で直接通知すると起動時の初回復元はリスナー登録前で消え、バックアップ復旧では重複する
+    const droppedVoiceMeasures = takeDroppedVoiceMeasureCount();
+    if (droppedVoiceMeasures > 0) notifyScoreEdit(describeVoiceLimitTrimmed(droppedVoiceMeasures, MAX_VOICES_PER_LAYER));
     try {
       // パート譜表示は保存されない一時ビュー（設計書どおり「読込後は必ず総譜」）。
       // 同じパートIDを持つ別作品へ切り替えたときにパート譜表示が引き継がれてしまう
@@ -4086,7 +4105,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         // 声部を変えたら譜面の選択も手放す（レイヤーボタンと同じ規則・Issue #238 の型）。
         // 前の声部の音符が選択のまま残ると、Delete / 矢印キーが切替前の声部へ届いてしまう
         requestScoreSelectionClear();
-        setActiveVoice(prev => cycleVoiceIndex(prev, activeLayerVoiceCountRef.current));
+        if (activeLayerVoiceCountRef.current <= 1) {
+          // 巡回する先が無いときは黙らない（#318「行き止まりは喋る」）
+          notifyScoreEdit(describeVoiceCycleUnavailable());
+        } else {
+          setActiveVoice(prev => cycleVoiceIndex(prev, activeLayerVoiceCountRef.current));
+        }
         e.preventDefault();
       }
       // . キー: 付点のON/OFFを切り替える（音価が選択されているときのみ有効）
@@ -6082,7 +6106,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         } else {
           xml = new TextDecoder('utf-8').decode(bytes);
         }
-        const { score: loaded, defaults: importedDefaults, globalBpm: importedGlobalBpm, unsupportedDynamicsCount } = parseMusicXmlWithDefaults(xml);
+        const { score: loaded, defaults: importedDefaults, globalBpm: importedGlobalBpm, unsupportedDynamicsCount, voicesOverLimitMeasureCount } = parseMusicXmlWithDefaults(xml);
         // 先頭小節の <sound tempo>（全体テンポ）は再生パネルへ反映する（#518）。
         // これが無いと往復で全体テンポが既定 120 に戻る（QA で確定した症状）
         if (importedGlobalBpm != null) setBPM(importedGlobalBpm);
@@ -6103,6 +6127,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         // 対応表に無い強弱記号（sfz・fp など）は取り込まないので、黙って消さずに件数を知らせる（#552）
         if (unsupportedDynamicsCount != null && unsupportedDynamicsCount > 0) {
           importNotices.push(describeImportedUnsupportedDynamics(unsupportedDynamicsCount));
+        }
+        // 5 声以上の小節は上限（4 声）までしか読まない。捨てたことは必ず言う（#417 round1 P1-4・round2 P1-1）
+        if (voicesOverLimitMeasureCount != null && voicesOverLimitMeasureCount > 0) {
+          importNotices.push(describeVoiceLimitTrimmed(voicesOverLimitMeasureCount, MAX_VOICES_PER_LAYER));
         }
         setKeySignature(normalizeKeySignature(loaded.keySignature));
         await setTimeSignature(...normalizeTimeSignature(loaded.timeSignature));
@@ -6548,11 +6576,25 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 非ピアノ譜のパート選択は五線のクリックという空間的な操作で状態が残らないため、
   // ここで覚えてレイヤーチップの本数と「＋」の追加先をその段に合わせる。
   // ピアノ譜は手のチップ（activeLayerPart）が正本なので、この値は使わない
+  // 編成譜のキャンバスは「パート→その 2 段目」を交互に並べたスロット添字で段を数えるが、
+  // getEditablePartEntries は「全パートの 1 段目 → 2 段目群」の順なので、添字をそろえる（round2 P2-2）。
+  // 大譜表パートより後ろに単段パートがある編成（ピアノ＋Vn など）で別パートの声部数を数えないため
+  const ensembleSlotToEntryIndexRef = useRef<(slot: number) => number>((slot) => slot);
+  ensembleSlotToEntryIndexRef.current = (slot: number) => {
+    if (scoreType !== 'ensemble') return slot;
+    const slots: number[] = [];
+    let secondStaffOrdinal = 0;
+    instrumentation.parts.forEach((part, partIndex) => {
+      slots.push(partIndex);
+      if (part.staffCount === 2) slots.push(instrumentation.parts.length + secondStaffOrdinal++);
+    });
+    return slots[slot] ?? slot;
+  };
   useEffect(() => {
     const onActivePartChange = (e: Event) => {
       const partIndex = (e as CustomEvent<ScoreActivePartChangeDetail>).detail?.partIndex;
       if (typeof partIndex !== 'number' || partIndex < 0) return;
-      setActivePartIndex(partIndex);
+      setActivePartIndex(ensembleSlotToEntryIndexRef.current(partIndex));
     };
     window.addEventListener(SCORE_ACTIVE_PART_CHANGE_EVENT, onActivePartChange);
     return () => window.removeEventListener(SCORE_ACTIVE_PART_CHANGE_EVENT, onActivePartChange);
@@ -6834,7 +6876,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             <span className="toolbar-group-label">レイヤー</span>
             {Array.from({ length: layerPartAxisCount }, (_unused, partIdx) => {
               const partVoiceCount = voiceSlotCounts[partIdx] ?? 1;
-              const partName = layerPartLabel(scoreType, partIdx);
+              // ピアノ譜は「右手/左手」。それ以外は「最後に触った段」の名前（round2 P2-1:
+              // どの段に「＋」が効くかが見えていないと、承認仕様の「どの段に足すか選ぶ」ができない）
+              const partName = layerPartLabel(scoreType, partIdx) || activePartDisplayLabel;
               return (
                 <span
                   key={`layer-part-${partIdx}`}

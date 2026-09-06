@@ -8,8 +8,8 @@ import { validateSavedScoreData } from './storage';
 import { sanitizePickupBeatsInParts } from './measureCapacityUtils';
 import { normalizeTimeSignature } from './timeSignatureUtils';
 import { normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
-import { MAX_VOICES_PER_PART, enforceVoiceLimitInParts, normalizeEmptyVoicesInParts, normalizeMeasuresForPersistence } from './voiceMeasureUtils';
-import { describeVoiceLimitTrimmed, notifyScoreEdit } from './scoreEditorNotices';
+import { enforceVoiceLimitInParts, normalizeEmptyVoicesInParts, normalizeMeasuresForPersistence } from './voiceMeasureUtils';
+import { recordDroppedVoiceMeasures } from './scoreEditorNotices';
 
 /**
  * JSON 文字列を FileSystemFileHandle へ書き込む（File System Access API）
@@ -204,7 +204,7 @@ export async function importScoreFromFile(file: File): Promise<SavedScoreData> {
       //     編集 UI に出ない声部を残すと、再生と再保存にだけ現れる「見えない声部」になる。
       //     捨てたことは必ず言う（#318「行き止まりは喋る」）
       if (voiceLimited.droppedMeasureCount > 0) {
-        notifyScoreEdit(describeVoiceLimitTrimmed(voiceLimited.droppedMeasureCount, MAX_VOICES_PER_PART));
+        recordDroppedVoiceMeasures(voiceLimited.droppedMeasureCount);
       }
       // ④ 鏡の同期（#244 段5-3）: read が voices[0] を優先するため、旧バージョンや
       //    手編集のファイルで鏡が古い場合にここで events（正本）から同期する

@@ -946,6 +946,11 @@ export function describeVoiceAdded(layerLabel: string): string {
  * 減らす専用のUIは無い（空の声部は音符を消すと自動で畳まれる）ので、
  * その代替手順まで含めて言う。
  */
+/** V キーで巡回する声部が 1 本しか無いときの通知（#417 round2 P3・#318「行き止まりは喋る」） */
+export function describeVoiceCycleUnavailable(): string {
+  return '声部は1つだけです。レイヤーの「＋」で声部を追加すると V で切り替えられます';
+}
+
 export function describeVoiceLimitReached(maxVoices: number): string {
   return `声部は1つの段につき${maxVoices}つまでです。使わない声部は音符をすべて消すと自動で消えます`;
 }
@@ -957,6 +962,23 @@ export function describeVoiceLimitReached(maxVoices: number): string {
  * そのまま抱えると「画面に出ないのに鳴り、保存し直すと残る声部」になる。
  * 落とすこと自体はデータの欠損なので、何小節に効いたかまで言う（#318「行き止まりは喋る」）。
  */
+/**
+ * 読込境界（localStorage / ファイル）で上限超えの声部を落とした小節数の受け渡し（#417 round2 P2-3）。
+ * パーサの中で notifyScoreEdit を直接呼ぶと、起動時の初回復元ではリスナー登録前で通知が消え、
+ * バックアップ復旧で 3 回まで呼ばれると重複する。パーサは件数を記録するだけにし、
+ * 画面へ反映する側（applyLoadedScoreData / ファイル取り込み）が takeDroppedVoiceMeasureCount で
+ * 1 回だけ取り出して通知する
+ */
+let droppedVoiceMeasureCount = 0;
+export function recordDroppedVoiceMeasures(measureCount: number): void {
+  if (Number.isFinite(measureCount) && measureCount > 0) droppedVoiceMeasureCount = Math.max(droppedVoiceMeasureCount, measureCount);
+}
+export function takeDroppedVoiceMeasureCount(): number {
+  const count = droppedVoiceMeasureCount;
+  droppedVoiceMeasureCount = 0;
+  return count;
+}
+
 export function describeVoiceLimitTrimmed(measureCount: number, maxVoices: number): string {
   return `${maxVoices}声を超える声部があったため、${measureCount}小節で${maxVoices + 1}声目以降を読み込みませんでした（このアプリは1つの段につき${maxVoices}声までです）`;
 }
