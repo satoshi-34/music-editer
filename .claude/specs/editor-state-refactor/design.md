@@ -235,7 +235,7 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
   テーブル本体は通知手段を知らない
 - **構造**: フラグ系15モードの if 連鎖 → `flagToolOutcome()` の switch 1枚（モードは排他のため
   評価順の畳み込みに挙動差なし。段3a と同じ論拠）。passThrough は対象種別の既定処理
-  `noteDefaultOutcome()` / `restDefaultOutcome()` へ続く
+  `noteDefaultOutcome()` / `restDefaultOutcome()` へ続く（段6b-4e で `handlers/noteClick/defaultOutcome.ts` の `noteDefaultNoteClick` / `restDefaultNoteClick` へ移設）
 - **セルの移設（挙動ゼロ差）**: 旧休符分岐にあった (記号系6ツール×休符)=rejected 通知
   （activeSymbolTool 集約変数は廃止し各セルがリテラルで組む）と (臨時記号×休符)=調号領域判定を、
   それぞれのツールの case へ移した。通知文面・発火条件は同一
@@ -890,6 +890,36 @@ updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setText
 - 検証: 本文の機械比較 IDENTICAL（4 モード）、tsc -b、フルテスト、lint:ratchet 基準値、独立レビュー、ブラウザで
   前打音ツールで m1 の 4 音目を押し、システム SVG の要素数が 588→600（前打音の描画分）に増えて元に戻すが有効になること、
   元に戻すで 588 に戻ることを DOM で確認。譜面は未変更
+
+### 段6b-4e: 臨時記号付与と既定処理（音符セル / 休符セル）を handlers/noteClick へ（2026-09-06）
+
+- `src/editor/handlers/noteClick/accidentalApply.ts` … `accidentalApplyNoteClick`（本文 88 行。mode を持たない臨時記号ツールの「付与」。
+  戻り値 null は従来どおり「付与ではない＝既定処理へ」の合図で、Canvas の `flagToolOutcome` が `?? passThrough` で受ける）
+- `src/editor/handlers/noteClick/defaultOutcome.ts` … `noteDefaultNoteClick`（本文 84 行。符頭の個別選択 → 和音追加 → 隣接挿入）と
+  `restDefaultNoteClick`（本文 129→128 行。連符グループ貼り付け → 置換/分割 → 選択/挿入）。テーブルが passThrough を返したときの既定処理
+- **幾何を `NoteTarget.geometry`（`NoteClickGeometry`）として足した**（6b-4a で予告したとおり、必要になった段で）:
+  `lx / ly / isOnNote / chordTopY / chordBotY / restBodyCenterX / stave / l2k / k2l / noteK2l / snapLineForKeySelect / resolveSelectableKeyIndexAt`。
+  平らに 12 個足すと NoteTarget が「対象」と「幾何」の区別を失うので、束を 1 段ネストした。NoteTarget 本体に足したのは
+  `i`（行頭判定）/ `clefHere` / `partKeyForAccidental` / `firstStaveKeySignatureHitBounds`（MeasureTarget と同じ名前・同じ型）/ `cycleId`
+- **読む口 `NoteReader` を新設**（書き込み口 NoteWriter と対）: `partsScoreRef`（最新ミラー）/ `capacityBeatsAt` / `getDurationTool` /
+  `buildRestEditReplacement` / `previewAccidentalOnApply`。後ろ 2 つの関数は Canvas のモジュール関数で、音価ヘルパ 7 本
+  （`toVFDur / beatsFromVF / durKeyFromBeats / dotBeatsMultiplier / DURATION_TOOL_VALUES / DurKey / defaultRestKeyForClef`）と癒着している
+  ため、この段では関数を渡すに留め、ヘルパごと editor へ移すのは別段（6b-4f 候補）にした
+- NoteWriter に `doInsert`（隣接挿入）と `onKeySignatureChange`（調号領域のクリック）を追加。`noteDefaultNoteClick` は再クリック巡回を
+  起点にする（`armClickCycleFor`）ので `ctx: { cycle: ClickCycleApi }` を第 1 引数で受ける（6b-3 の ctx-first と同じ形）
+- `REST_BODY_HIT_HALF_WIDTH`（休符本体クリックの半幅 18）は Canvas のモジュール定数からホバー側も参照するため、`editor/hitResolution.ts` へ
+  移して両方が import する（6a の `OTTAVA_STAFF_GAP_PX` と同じ扱い。コンポーネントからの再 export は react-refresh の lint に当たる）
+- 本文で変えた行は 1 つだけ: `const restBodyCenterX=anchors[j];` を落とし、幾何の `restBodyCenterX` として受ける（`anchors` 全体を渡さない）。
+  それ以外の本文は機械比較 IDENTICAL（3 関数。`me` は 6b-4c と同じく関数冒頭で `{ clientX, clientY }` に束ね直す）。
+  レビュー反映でコメント 1 行だけ書き換えた（「上の NOTE_HIT_EXTENSION」→ Canvas 側のコメントを指す。コードは不変）
+- これで符頭クリックのリスナは「巡回 → 帰属解決 → 束を作る → テーブル評価 → 通知」だけになり、モードごとの本文は Canvas に残っていない。
+  PianoSystemCanvas 8,767 → 8,442 行。移設で不要になった import 8 つと `armClickCycleFor` の分割代入を掃除
+- ctx の受け方が 2 流儀になっている（`noteDefaultNoteClick({ cycle })` は measureClick 流、`handleVoice2NoteClick(cycle, …)` は裸で渡す）。
+  6b-末で薄い入口 `noteClick.ts` を作るときにどちらかへ揃える
+- 検証: 本文の機械比較 IDENTICAL（3 関数・上記 1 行を除く）、tsc -b、フルテスト 404 ファイル・3,816 件、lint:ratchet 324 件（基準ちょうど）、
+  独立レビュー 2 本（挙動: 承認・P3 の型の緩み 1 件反映／設計: マージ可・P2 2 件＋体裁 4 件反映）、ブラウザ（worktree を 5175 で配信）で
+  四分音符ツールによる休符→音符の置換、符頭の選択、和音追加（符頭 1→2）、♯ ツールでの付与（U+E262 が SVG に出る）と元に戻すでの復元を
+  DOM で確認。コンソールエラーなし
 
 ### 段6b-2 の先行分割: 巡回判定の依存方向整理（2026-09-06）
 

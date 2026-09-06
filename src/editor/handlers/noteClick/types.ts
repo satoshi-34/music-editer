@@ -1,17 +1,50 @@
 // src/editor/handlers/noteClick/types.ts
 // 符頭クリック（PianoSystemCanvas の 744 行のハンドラ）をモードごとに割って移すときの共通の引数型
-// （#695 段6b-4）。設計書 §17 の「文脈＋対象＋ツール＋書き込み口」のうち、対象と書き込み口をここに置く。
+// （#695 段6b-4）。設計書 §17 の「文脈＋対象＋ツール＋書き込み口」のうち、対象（幾何を含む）・読む口・書き込み口をここに置く。
 // 値はすべて描画 effect のローカルそのもの（束ねても挙動は変わらない）。
-import type { MeasureData, NoteEvent } from '../../../types/storage';
+import type { DurKey, MeasureData, NoteEvent } from '../../../types/storage';
 import type { InstrumentType } from '../../../audio/SoundSource';
 import type { PartConfig } from '../../../components/PianoSystemCanvas';
 import type { RefObject } from 'react';
 import type { CustomSymbolDef } from '../../../types/storage';
 import type { OverlayRectLike } from '../../../utils/symbolOverlayPlacementUtils';
 import type { AdjustTarget, OverlayStates, Sel } from '../../types';
+import type { Stave } from 'vexflow';
+import type { ClefType } from '../../../components/clefUtils';
+import type { KeySignature } from '../../../utils/noteKeyUtils';
+import type { Tool } from '../../../components/Palette';
 
 /** 描画時に声部へ束縛されたイベント列の要素。全休符プレースホルダーは __isPlaceholder が立つ */
 export type ClickableNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
+
+/**
+ * 符頭クリックが読む幾何（段6b-4e で追加）。当たり判定まわりの Canvas ローカルを束ねたもの:
+ * buildNoteHitGeometry（editor/hitResolution の resolveNoteHitGeometry）の戻り値（chordTopY / chordBotY / noteK2l /
+ * snapLineForKeySelect / resolveSelectableKeyIndexAt）、帯の五線と行 ⇄ 鍵の変換（stave / l2k / k2l）、クリック点（lx / ly）、
+ * リスナ内で求めた和音ゾーン判定（isOnNote）と休符アンカー（restBodyCenterX）。値は Canvas のローカルそのもの。
+ */
+export interface NoteClickGeometry {
+  /** クリック点（SVG group 座標。clientToGroup の戻り値） */
+  lx: number;
+  ly: number;
+  /** 符頭の実描画X範囲 ± CHORD_HIT_PAD かつ五線±3加線の固定Y範囲内＝和音追加ゾーン */
+  isOnNote: boolean;
+  /** 五線±3加線の固定Y範囲（この外側は「選択だけ」の拡張領域。#218 / #246） */
+  chordTopY: number;
+  chordBotY: number;
+  /** 休符の描画アンカーX（anchors[j]）。休符の bbox は横に広いので、この中心 ± REST_BODY_HIT_HALF_WIDTH で本体クリックを決める */
+  restBodyCenterX: number;
+  /** 帯のパートの五線（snapLine に渡す） */
+  stave: Stave;
+  /** 帯のクレフでの行 ⇄ 鍵の変換 */
+  l2k: (line: number) => string;
+  k2l: (key: string) => number;
+  /** 段またぎを解決した「実際に載る五線」のクレフでの keyToLine（#310。臨時記号の付け先の引き直しに使う） */
+  noteK2l: (key: string) => number;
+  /** 符頭選択用の行スナップと、クリック位置が指す構成音の位置（判定式は resolveNoteHitGeometry に集約。ホバー・巡回と共用） */
+  snapLineForKeySelect: (y: number) => number;
+  resolveSelectableKeyIndexAt: (lx: number, ly: number) => number;
+}
 
 /** どの符頭を押したか（帯のパート・小節・イベント位置と、帰属を解決した書き込み先） */
 export interface NoteTarget {
@@ -35,6 +68,38 @@ export interface NoteTarget {
   /** クリックの画面座標（オーバーレイの出現位置・記号の位置引き当ての逃げ道に使う。段6b-4c で追加） */
   clientX: number;
   clientY: number;
+  /** システム内の小節位置（0 が行頭。調号領域の判定は行頭だけ。段6b-4e で追加） */
+  i: number;
+  /** この小節で有効なクレフ（休符の既定 key・補完に使う。段6b-4e で追加） */
+  clefHere: ClefType;
+  /** このパート・小節で有効な調号（移調楽器のずれを含む。挿入・和音追加の鍵の綴りに使う。段6b-4e で追加） */
+  partKeyForAccidental: KeySignature;
+  /** 1 段目の調号の当たり範囲（行頭の休符クリックを調号変更へ流す判定。段6b-4e で追加） */
+  firstStaveKeySignatureHitBounds: { left: number; right: number };
+  /** 再クリック巡回（#264）でこの符頭を指す id（noteCycleId。段6b-4e で追加） */
+  cycleId: string;
+  /** 当たり判定の幾何とクリック点（段6b-4e で追加） */
+  geometry: NoteClickGeometry;
+}
+
+/**
+ * 読む口（段6b-4e）: 譜面の最新ミラー・小節容量・ツールから「何を置くか」を導く関数・設定。
+ * 譜面を書く NoteWriter と分けるのは、署名から「読むだけの依存」と「書く依存」を区別できるようにするため。
+ * 値はいずれも Canvas の ref・関数・props そのもの。
+ */
+export interface NoteReader {
+  /** 保存データのミラー（毎レンダーで同期）。当たり判定は描画時点の図形なので、書く前にここで引き直す */
+  partsScoreRef: { current: MeasureData[][] };
+  /** 小節の容量（拍）。休符補完（fillPriorMeasureRests）に渡す */
+  capacityBeatsAt: (absoluteMeasureIndex: number) => number;
+  /**
+   * ツールが音価ツールなら音価を返す／休符クリックの置換・分割の計画（Canvas のモジュール関数）。
+   * 音価ヘルパ 7 本（toVFDur / beatsFromVF / durKeyFromBeats …）と一緒に editor へ移す段まではここから受ける
+   */
+  getDurationTool: (tool: Tool) => { duration: DurKey; isRest?: boolean; dots?: 1 } | null;
+  buildRestEditReplacement: (restEvent: NoteEvent, key: string, tool: Tool, noteAfterRest: boolean, clef: ClefType) => NoteEvent[] | null;
+  /** 臨時記号を付けたあとに確認音を鳴らすか（props。既定 true） */
+  previewAccidentalOnApply: boolean;
 }
 
 /** 譜面・選択・再生へ書き込む口（Canvas が持つ関数をそのまま渡す） */
@@ -45,6 +110,10 @@ export interface NoteWriter {
   playNoteEvent: (noteEvent: NoteEvent, instrument?: InstrumentType) => void | Promise<void>;
   /** 解決済み帰属のパートの小節列を updater で書き換える（setScoreFor(hitPi)。段6b-4d で追加） */
   setHitScore: (updater: (prev: MeasureData[]) => MeasureData[]) => void;
+  /** クリック位置へ音符・休符を隣接挿入する（Canvas の doInsert。段6b-4e で追加） */
+  doInsert: (lx: number, ly: number, sourceBandPi?: number) => void;
+  /** 調号領域のクリックで調号を変える（props。段6b-4e で追加） */
+  onKeySignatureChange?: (keySignature: KeySignature, partIndex?: number) => void;
 }
 
 /**
