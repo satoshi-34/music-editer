@@ -602,7 +602,10 @@ effect 側で移設前と同じ名前に分割代入する。これで本文は 
 - 型は当面 `import type` で PianoSystemCanvas から借りる（実行時の循環は無い）。段6b で型を
   `src/editor/types.ts` へ寄せる
 - 定数（弧の当たり判定寸法・OTTAVA_STAFF_GAP_PX）は新モジュール側を正本にし、コンポーネントは
-  import する（テストが PianoSystemCanvas から import する定数は re-export で互換維持）
+  import する。コンポーネントからの re-export はしない（react-refresh の「コンポーネント以外の export」
+  で lint が 1 件増えるため）。テストは新モジュールから import する（OttavaLayout テストを書き換え済み）
+- `PendingClickCycle`（clickCyclePendingRef の中身の型）は spanRenderer.ts で定義した。PianoSystemCanvas 側の
+  インライン型と重複しているので、段6b で `src/editor/types.ts` へ寄せるときに片方へ統一する
 - 「何を閉包から受けているか」は TypeScript の AST で自由変数を機械的に列挙して決めた
   （`scratchpad/free-ids.cjs`。手で数えると取りこぼす）
 
