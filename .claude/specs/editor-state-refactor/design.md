@@ -734,3 +734,12 @@ export function handleNoteClick(
   同じ座標でクリック。選択端点の DOM 属性が a1 → a0 → a1 と変わることと画面表示を確認。
   検証ページの初版の import 誤りを修正した後は、新たなコンソールエラーなし。
   検証用ページは確認後に削除した。音符とスラーの巡回は既存回帰テストで確認。
+
+#### PR #698 レビュー対応
+
+- `prepareClickCycle` の戻り値を `PendingClickCycle | null` と明示した。実行時の処理は変更しない。
+- 現在の `editor/clickCycle.ts` → `components/clickCycleUtils.ts` の依存は移行途中のもの。
+  後続の段6b-2で純粋判定とそのテストを editor 配下へ移し、Canvas 側の型参照も更新して
+  editor から components へのこの依存を解消する。今回はレビュー済みの移設範囲を保つ。
+- ブラウザ確認画像を `docs/qa/evidence/click-cycle-selection.png` に保存し、PR本文にも添付した。
+  画像は巡回後の表示の証跡であり、選択の往復は上記 DOM 属性の確認結果と合わせて読む。

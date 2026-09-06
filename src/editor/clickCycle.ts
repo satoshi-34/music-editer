@@ -48,7 +48,7 @@ export function createClickCycle(svg: SVGSVGElement, refs: ClickCycleRefs) {
    * 巡回すべきかを判定し、するなら「次に選ぶ対象」を返す（まだ実行はしない）。
    * null のときは呼び出し側が従来どおりの処理を続ける（進み具合はここで捨てる）。
    */
-  const prepareClickCycle=(selfId:string,clientX:number,clientY:number)=>{
+  const prepareClickCycle=(selfId:string,clientX:number,clientY:number):PendingClickCycle | null=>{
     const candidates=collectClickCycleCandidates(clientX,clientY);
     const plan=planClickCycle(clickCycleStateRef.current,clientX,clientY,candidates.map(c=>c.id),selfId);
     if(!plan){
